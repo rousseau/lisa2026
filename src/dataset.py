@@ -247,19 +247,74 @@ class LISAJointDataset(Dataset):
     # ── split train / val ─────────────────────────────────────────────────────
 
     def _apply_split(self, split: str, val_fraction: float):
-        """Split 80/20 par sujet, stratifié par groupe de sujets avec GT."""
+        """
+        Split train/val par sujet, stratifié par artefact.
+
+        Pour chaque type d'artefact, au moins ceil(val_fraction * n_actifs)
+        sujets actifs sont réservés dans la val, ce qui garantit que tous les
+        artefacts présents dans les données sont représentés en validation
+        (évite qu'un artefact rare, ex. Banding, se retrouve entièrement dans
+        le train à cause d'un simple tri par ID).
+
+        Algorithme :
+          1. Pour chaque artefact, trier les sujets actifs et en prélever
+             ceil(val_fraction) dans la val (échantillonnage uniforme).
+          2. Compléter la val avec des sujets neutres (sans aucun artefact actif)
+             pour atteindre le quota global val_fraction * n_sujets.
+          3. Tous les sujets VALIDATION sont exclus des deux splits.
+        """
         if split == "all":
             return
 
-        # groupes ayant de la supervision (train_seg et train_seg_hf)
+        import math
+
+        # Sujets supervisés (hors set VALIDATION et hors ciso-only)
         supervised_subjects = sorted({
             it["subject"]
             for it in self.items
             if 1 <= it["sid"] <= 1999 and "VALIDATION" not in it["subject"]
         })
-        n_val = max(1, int(val_fraction * len(supervised_subjects)))
-        val_subjects = set(supervised_subjects[-n_val:])
+        n_total = len(supervised_subjects)
+        n_val_target = max(1, int(val_fraction * n_total))
 
+        # Carte sujet → labels Task1a (on prend les 3 orientations aniso)
+        subj_labels: dict[str, np.ndarray] = {}
+        for it in self.items:
+            if it["has_task1a"] and it["subject"] in set(supervised_subjects):
+                if it["subject"] not in subj_labels:
+                    subj_labels[it["subject"]] = it["task1a_labels"].copy()
+                else:
+                    # max par artefact (même sujet, 3 orientations identiques)
+                    subj_labels[it["subject"]] = np.maximum(
+                        subj_labels[it["subject"]], it["task1a_labels"]
+                    )
+
+        val_subjects: set[str] = set()
+
+        # ── 1. garantir la représentation de chaque artefact ─────────────────
+        for a in range(N_ARTIFACTS):
+            actifs = sorted(
+                s for s, lbl in subj_labels.items() if lbl[a] > 0
+            )
+            if not actifs:
+                continue
+            n_val_art = max(1, math.ceil(val_fraction * len(actifs)))
+            # prélèvement uniforme pour couvrir toute la gamme des sévérités
+            step = max(1, len(actifs) // n_val_art)
+            for k in range(0, len(actifs), step):
+                if len(val_subjects) < n_val_target:
+                    val_subjects.add(actifs[k])
+
+        # ── 2. compléter avec des sujets neutres ──────────────────────────────
+        all_active = {s for s, lbl in subj_labels.items() if lbl.any()}
+        neutral = [s for s in supervised_subjects if s not in all_active]
+        # on complète en prenant les derniers (tri par ID croissant → stable)
+        for s in reversed(neutral):
+            if len(val_subjects) >= n_val_target:
+                break
+            val_subjects.add(s)
+
+        # ── 3. filtrage ───────────────────────────────────────────────────────
         if split == "train":
             self.items = [
                 it for it in self.items if it["subject"] not in val_subjects
