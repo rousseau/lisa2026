@@ -30,6 +30,8 @@ from dataset import LISAJointDataset, DATA_ROOT_DEFAULT
 from losses import multi_task_loss
 from model import BrainFMLISA
 
+RESULTS_DIR = Path(__file__).parent.parent / "results"
+
 CKPT_DIR = Path(__file__).parent.parent / "outputs" / "checkpoints"
 DEFAULT_CONFIG = Path(__file__).parent.parent / "configs" / "train_default.yaml"
 
@@ -75,6 +77,7 @@ def load_config(cli_args: argparse.Namespace) -> dict:
         "batch_size":    t.get("batch_size",     1),
         "num_workers":   t.get("num_workers",    2),
         "save_every":    t.get("save_every",    10),
+        "viz_every":     t.get("viz_every",     10),
         "lr":            t.get("lr",          1e-4),
         "weight_decay":  t.get("weight_decay", 1e-5),
         "lam1a":         t.get("lam1a",        1.0),
@@ -87,6 +90,7 @@ def load_config(cli_args: argparse.Namespace) -> dict:
         "resume":        None,
         "debug":         False,
         "config":        str(cfg_path),
+        "no_viz":        False,
     }
 
     # Surcharge par les arguments CLI non-None
@@ -108,6 +112,7 @@ def load_config(cli_args: argparse.Namespace) -> dict:
         "device":        cli_args.device,
         "resume":        cli_args.resume,
         "debug":         cli_args.debug,   # bool, toujours présent
+        "no_viz":        cli_args.no_viz if hasattr(cli_args, "no_viz") else False,
     }
     for k, v in overrides.items():
         if v is not None:
@@ -155,6 +160,10 @@ def parse_args():
     p.add_argument(
         "--debug", action="store_true",
         help="1 epoch, 4 batchs train / 2 batchs val — pour vérification rapide",
+    )
+    p.add_argument(
+        "--no-viz", action="store_true",
+        help="Désactiver la génération des figures PNG",
     )
     return p.parse_args()
 
@@ -322,11 +331,12 @@ def main():
         )
 
         # sauvegarde checkpoint
-        if (
+        do_save = (
             (epoch + 1) % cfg["save_every"] == 0
             or epoch + 1 == epochs
             or cfg["debug"]
-        ):
+        )
+        if do_save:
             ckpt_path = CKPT_DIR / f"epoch_{epoch + 1:04d}.pt"
             torch.save(
                 {
@@ -340,6 +350,25 @@ def main():
                 ckpt_path,
             )
             print(f"  → checkpoint sauvegardé : {ckpt_path}")
+
+        # visualisation
+        do_viz = (
+            not cfg["no_viz"]
+            and (
+                (epoch + 1) % cfg["viz_every"] == 0
+                or epoch + 1 == epochs
+                or cfg["debug"]
+            )
+        )
+        if do_viz:
+            try:
+                from visualize import visualize_all
+                visualize_all(
+                    model, val_ds, CKPT_DIR, RESULTS_DIR,
+                    epoch + 1, device,
+                )
+            except Exception as exc:
+                print(f"  [viz] Erreur (ignorée) : {exc}")
 
     print("Entraînement terminé.")
 
