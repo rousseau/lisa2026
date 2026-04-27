@@ -80,7 +80,7 @@ def collect_files(data_root: Path) -> pd.DataFrame:
             "has_lf_seg": has_lf_seg,
             "has_hf_seg": has_hf_seg,
             "has_ciso": has_ciso,
-            "has_ciso_with_seg": has_ciso and has_hf_seg,
+            "has_ciso_with_seg": has_ciso and has_lf_seg,
         })
     return pd.DataFrame(rows)
 
@@ -265,14 +265,14 @@ def main():
             analyse_seg(data_root / f"{row['subject']}_LF_seg.nii.gz",
                         row["subject"], "LF_seg")
 
-        subsection("Segmentations HF (_seg) des sujets ciso")
+        subsection("Segmentations LF (_LF_seg) des sujets ciso")
         ciso_seg_subjects = (
             df[df["has_ciso_with_seg"] & (df["orientation"] == "axi")]
             .head(5)
         )
         for _, row in ciso_seg_subjects.iterrows():
-            analyse_seg(data_root / f"{row['subject']}_seg.nii.gz",
-                        row["subject"], "HF_seg")
+            analyse_seg(data_root / f"{row['subject']}_LF_seg.nii.gz",
+                        row["subject"], "LF_seg_ciso")
 
         pd.DataFrame(rows_seg).to_csv(RESULTS_DIR / "seg_volumes_sample.csv", index=False)
 
