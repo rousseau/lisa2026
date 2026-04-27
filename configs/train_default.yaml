@@ -37,8 +37,8 @@ model:
 # ── Entraînement ──────────────────────────────────────────────────────────────
 training:
   epochs:      100
-  batch_size:  1
-  num_workers: 2
+  batch_size:  4
+  num_workers: 4
   save_every:  10    # sauvegarder un checkpoint toutes les N époques
   viz_every:   10    # générer les figures PNG dans results/plots/ toutes les N époques
 
