@@ -3,16 +3,18 @@
 Script d'entraînement — Modèle joint LISA 2026.
 
 Usage :
-    # entraînement complet
-    python src/train.py
+    # entraînement complet avec config par défaut
+    python src/train.py --config configs/train_default.yaml
 
-    # debug 1 epoch (4 batchs train + 2 val)
-    python src/train.py --debug
+    # debug 1 epoch
+    python src/train.py --config configs/train_default.yaml --debug
 
-    # options principales
-    python src/train.py --epochs 100 --batch-size 1 --target-size 96 \\
-                        --lr 1e-4 --lam1a 1.0 --lam1b 1.0 --lam2 1.0 \\
-                        --device cuda --resume outputs/checkpoints/epoch_0010.pt
+    # surcharge d'un paramètre
+    python src/train.py --config configs/train_default.yaml --epochs 200 --lr 5e-5
+
+    # reprise depuis checkpoint
+    python src/train.py --config configs/train_default.yaml \\
+                        --resume outputs/checkpoints/epoch_0010.pt
 """
 
 import argparse
@@ -21,13 +23,97 @@ from pathlib import Path
 
 import torch
 import torch.optim as optim
+import yaml
 from torch.utils.data import DataLoader
 
-from dataset import LISAJointDataset, DATA_ROOT_DEFAULT, TARGET_SIZE
+from dataset import LISAJointDataset, DATA_ROOT_DEFAULT
 from losses import multi_task_loss
 from model import BrainFMLISA
 
 CKPT_DIR = Path(__file__).parent.parent / "outputs" / "checkpoints"
+DEFAULT_CONFIG = Path(__file__).parent.parent / "configs" / "train_default.yaml"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Chargement de la configuration
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _load_yaml(path: Path) -> dict:
+    with open(path) as fh:
+        return yaml.safe_load(fh)
+
+
+def load_config(cli_args: argparse.Namespace) -> dict:
+    """
+    Fusionne le fichier YAML et les arguments CLI.
+    Priorité (croissante) : valeurs YAML < arguments CLI explicites.
+    """
+    cfg_path = Path(cli_args.config) if cli_args.config else DEFAULT_CONFIG
+    yaml_cfg = _load_yaml(cfg_path)
+
+    # Aplatir la structure YAML en un dict simple
+    d = yaml_cfg.get("data", {})
+    m = yaml_cfg.get("model", {})
+    t = yaml_cfg.get("training", {})
+    sched = t.get("scheduler", {})
+
+    cfg = {
+        # données
+        "data_root":     d.get("root",         DATA_ROOT_DEFAULT),
+        "target_size":   d.get("target_size",   96),
+        "val_fraction":  d.get("val_fraction",  0.2),
+        # modèle
+        "base_channels": m.get("base_channels", 16),
+        "c_anat":        m.get("c_anat",        16),
+        "c_mod":         m.get("c_mod",          8),
+        "c_art":         m.get("c_art",          8),
+        "n_artifacts":   m.get("n_artifacts",    7),
+        "n_severity":    m.get("n_severity",     3),
+        "n_seg_classes": m.get("n_seg_classes", 14),
+        # entraînement
+        "epochs":        t.get("epochs",       100),
+        "batch_size":    t.get("batch_size",     1),
+        "num_workers":   t.get("num_workers",    2),
+        "save_every":    t.get("save_every",    10),
+        "lr":            t.get("lr",          1e-4),
+        "weight_decay":  t.get("weight_decay", 1e-5),
+        "lam1a":         t.get("lam1a",        1.0),
+        "lam1b":         t.get("lam1b",        1.0),
+        "lam2":          t.get("lam2",         1.0),
+        "scheduler_tmax": sched.get("T_max",   None),
+        # matériel
+        "device":        yaml_cfg.get("device", "auto"),
+        # non-YAML
+        "resume":        None,
+        "debug":         False,
+        "config":        str(cfg_path),
+    }
+
+    # Surcharge par les arguments CLI non-None
+    overrides = {
+        "data_root":     cli_args.data_root,
+        "target_size":   cli_args.target_size,
+        "base_channels": cli_args.base_channels,
+        "c_anat":        cli_args.c_anat,
+        "c_mod":         cli_args.c_mod,
+        "c_art":         cli_args.c_art,
+        "epochs":        cli_args.epochs,
+        "batch_size":    cli_args.batch_size,
+        "num_workers":   cli_args.num_workers,
+        "save_every":    cli_args.save_every,
+        "lr":            cli_args.lr,
+        "lam1a":         cli_args.lam1a,
+        "lam1b":         cli_args.lam1b,
+        "lam2":          cli_args.lam2,
+        "device":        cli_args.device,
+        "resume":        cli_args.resume,
+        "debug":         cli_args.debug,   # bool, toujours présent
+    }
+    for k, v in overrides.items():
+        if v is not None:
+            cfg[k] = v
+
+    return cfg
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -35,25 +121,37 @@ CKPT_DIR = Path(__file__).parent.parent / "outputs" / "checkpoints"
 # ──────────────────────────────────────────────────────────────────────────────
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Entraînement LISA 2026 joint")
-    p.add_argument("--data-root",   default=DATA_ROOT_DEFAULT)
-    p.add_argument("--epochs",      type=int,   default=100)
-    p.add_argument("--batch-size",  type=int,   default=1)
-    p.add_argument(
-        "--target-size", type=int, default=96,
-        help="Taille spatiale isotrope (ex. 96 ou 128 selon la VRAM disponible)",
+    p = argparse.ArgumentParser(
+        description="Entraînement LISA 2026 joint",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument("--base-channels", type=int, default=16)
-    p.add_argument("--lr",          type=float, default=1e-4)
-    p.add_argument("--lam1a",       type=float, default=1.0, help="Poids Task1a")
-    p.add_argument("--lam1b",       type=float, default=1.0, help="Poids Task1b")
-    p.add_argument("--lam2",        type=float, default=1.0, help="Poids Task2")
+    # config YAML
     p.add_argument(
-        "--device", default="cuda" if torch.cuda.is_available() else "cpu"
+        "--config", default=None,
+        help=f"Fichier de configuration YAML (défaut : {DEFAULT_CONFIG})",
     )
-    p.add_argument("--num-workers", type=int, default=2)
-    p.add_argument("--save-every",  type=int, default=10)
-    p.add_argument("--resume",      default=None, help="Chemin d'un checkpoint")
+    # surcharges CLI (toutes avec default=None pour détecter les overrides)
+    p.add_argument("--data-root",     default=None)
+    p.add_argument("--target-size",   type=int,   default=None,
+                   help="Taille isotrope N×N×N (ex. 64/80/96/128)")
+    p.add_argument("--base-channels", type=int,   default=None,
+                   help="Largeur de base du UNet")
+    p.add_argument("--c-anat",        type=int,   default=None,
+                   help="Canaux sous-espace anatomique")
+    p.add_argument("--c-mod",         type=int,   default=None,
+                   help="Canaux sous-espace modalité")
+    p.add_argument("--c-art",         type=int,   default=None,
+                   help="Canaux sous-espace artefacts")
+    p.add_argument("--epochs",        type=int,   default=None)
+    p.add_argument("--batch-size",    type=int,   default=None)
+    p.add_argument("--num-workers",   type=int,   default=None)
+    p.add_argument("--save-every",    type=int,   default=None)
+    p.add_argument("--lr",            type=float, default=None)
+    p.add_argument("--lam1a",         type=float, default=None)
+    p.add_argument("--lam1b",         type=float, default=None)
+    p.add_argument("--lam2",          type=float, default=None)
+    p.add_argument("--device",        default=None)
+    p.add_argument("--resume",        default=None, help="Chemin d'un checkpoint")
     p.add_argument(
         "--debug", action="store_true",
         help="1 epoch, 4 batchs train / 2 batchs val — pour vérification rapide",
@@ -134,41 +232,70 @@ def val_epoch(model, loader, device, lam, debug=False):
 # ──────────────────────────────────────────────────────────────────────────────
 
 def main():
-    args   = parse_args()
-    device = torch.device(args.device)
-    ts     = (args.target_size,) * 3
-    lam    = (args.lam1a, args.lam1b, args.lam2)
+    cli  = parse_args()
+    cfg  = load_config(cli)
 
+    # Résolution du device
+    if cfg["device"] == "auto":
+        cfg["device"] = "cuda" if torch.cuda.is_available() else "cpu"
+    device = torch.device(cfg["device"])
+
+    ts  = (cfg["target_size"],) * 3
+    lam = (cfg["lam1a"], cfg["lam1b"], cfg["lam2"])
+
+    print(f"Config      : {cfg['config']}")
     print(f"Device      : {device}")
     print(f"Target size : {ts}")
-    print(f"Debug mode  : {args.debug}")
+    print(
+        f"Disentangle : z_anat={cfg['c_anat']}  "
+        f"z_mod={cfg['c_mod']}  z_art={cfg['c_art']}"
+    )
+    print(f"Debug mode  : {cfg['debug']}")
 
     # ── datasets ──────────────────────────────────────────────────────────────
-    train_ds = LISAJointDataset(args.data_root, target_size=ts, split="train")
-    val_ds   = LISAJointDataset(args.data_root, target_size=ts, split="val")
+    train_ds = LISAJointDataset(
+        cfg["data_root"], target_size=ts, split="train",
+        val_fraction=cfg["val_fraction"],
+    )
+    val_ds = LISAJointDataset(
+        cfg["data_root"], target_size=ts, split="val",
+        val_fraction=cfg["val_fraction"],
+    )
     print(f"Train : {len(train_ds)} items | Val : {len(val_ds)} items")
 
+    pin = device.type == "cuda"
     train_dl = DataLoader(
-        train_ds, batch_size=args.batch_size, shuffle=True,
-        num_workers=args.num_workers, pin_memory=(args.device == "cuda"),
+        train_ds, batch_size=cfg["batch_size"], shuffle=True,
+        num_workers=cfg["num_workers"], pin_memory=pin,
     )
     val_dl = DataLoader(
-        val_ds, batch_size=args.batch_size, shuffle=False,
-        num_workers=args.num_workers, pin_memory=(args.device == "cuda"),
+        val_ds, batch_size=cfg["batch_size"], shuffle=False,
+        num_workers=cfg["num_workers"], pin_memory=pin,
     )
 
     # ── modèle ────────────────────────────────────────────────────────────────
-    model = BrainFMLISA(base=args.base_channels).to(device)
+    model = BrainFMLISA(
+        base=cfg["base_channels"],
+        c_anat=cfg["c_anat"],
+        c_mod=cfg["c_mod"],
+        c_art=cfg["c_art"],
+        n_artifacts=cfg["n_artifacts"],
+        n_severity=cfg["n_severity"],
+        n_seg_classes=cfg["n_seg_classes"],
+    ).to(device)
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Paramètres  : {n_params:,}")
 
-    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-5)
-    epochs    = 1 if args.debug else args.epochs
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+    optimizer = optim.AdamW(
+        model.parameters(), lr=cfg["lr"], weight_decay=cfg["weight_decay"]
+    )
+    epochs   = 1 if cfg["debug"] else cfg["epochs"]
+    t_max    = cfg["scheduler_tmax"] or epochs
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=t_max)
 
     start_epoch = 0
-    if args.resume:
-        ckpt = torch.load(args.resume, map_location=device)
+    if cfg["resume"]:
+        ckpt = torch.load(cfg["resume"], map_location=device)
         model.load_state_dict(ckpt["model"])
         optimizer.load_state_dict(ckpt["optimizer"])
         start_epoch = ckpt["epoch"] + 1
@@ -180,8 +307,8 @@ def main():
     for epoch in range(start_epoch, epochs):
         t0 = time.time()
 
-        tr = train_epoch(model, train_dl, optimizer, device, lam, args.debug)
-        vl = val_epoch(model, val_dl, device, lam, args.debug)
+        tr = train_epoch(model, train_dl, optimizer, device, lam, cfg["debug"])
+        vl = val_epoch(model, val_dl, device, lam, cfg["debug"])
         scheduler.step()
 
         dt = time.time() - t0
@@ -195,16 +322,20 @@ def main():
         )
 
         # sauvegarde checkpoint
-        if (epoch + 1) % args.save_every == 0 or epoch + 1 == epochs or args.debug:
+        if (
+            (epoch + 1) % cfg["save_every"] == 0
+            or epoch + 1 == epochs
+            or cfg["debug"]
+        ):
             ckpt_path = CKPT_DIR / f"epoch_{epoch + 1:04d}.pt"
             torch.save(
                 {
-                    "epoch":         epoch,
-                    "model":         model.state_dict(),
-                    "optimizer":     optimizer.state_dict(),
-                    "train_losses":  tr,
-                    "val_losses":    vl,
-                    "args":          vars(args),
+                    "epoch":        epoch,
+                    "model":        model.state_dict(),
+                    "optimizer":    optimizer.state_dict(),
+                    "train_losses": tr,
+                    "val_losses":   vl,
+                    "config":       cfg,
                 },
                 ckpt_path,
             )
