@@ -21,21 +21,43 @@ N_SEG_CLASSES = 14
 # ──────────────────────────────────────────────────────────────────────────────
 
 def task1a_loss(
-    logits: torch.Tensor,   # [B, N_art, N_sev]
-    labels: torch.Tensor,   # [B, N_art]  long, valeurs 0/1/2
-    mask:   torch.Tensor,   # [B] bool – échantillons avec labels Task1a
+    logits:      torch.Tensor,               # [B, N_art, N_sev]
+    labels:      torch.Tensor,               # [B, N_art]  long, valeurs 0/1/2
+    mask:        torch.Tensor,               # [B] bool – échantillons avec labels Task1a
+    sev_weights: torch.Tensor | None = None, # [N_art, N_sev] poids de sévérité par artefact
+    art_weights: torch.Tensor | None = None, # [N_art] poids inter-artefact
 ) -> torch.Tensor:
     """
-    Cross-entropy indépendante par artefact, moyennée sur les artefacts et les
-    échantillons masqués.
+    Cross-entropy pondérée par artefact.
+
+    Pour chaque type d'artefact ``a`` :
+      - ``sev_weights[a]`` est passé comme ``weight`` à ``F.cross_entropy`` afin
+        de corriger le déséquilibre de sévérité (sev=0 très majoritaire).
+      - ``art_weights[a]`` pondère la contribution de chaque artefact à la loss
+        totale (les artefacts rares, ex. Banding, reçoivent un poids plus élevé).
+
+    Les poids sont calculés par ``dataset.compute_task1a_weights`` à partir du
+    jeu d'entraînement et passés ici depuis ``multi_task_loss``.
     """
     if not mask.any():
         return logits.sum() * 0.0   # gradient nul mais graph connecté
 
+    dev      = logits.device
     logits_m = logits[mask]   # [M, N_art, N_sev]
     labels_m = labels[mask]   # [M, N_art]
-    B, N, S  = logits_m.shape
-    return F.cross_entropy(logits_m.reshape(-1, S), labels_m.reshape(-1))
+    N        = logits_m.shape[1]
+
+    ce_per_art = []
+    for a in range(N):
+        w = sev_weights[a].to(dev) if sev_weights is not None else None
+        ce_a = F.cross_entropy(logits_m[:, a, :], labels_m[:, a], weight=w)
+        ce_per_art.append(ce_a)
+
+    ce_per_art = torch.stack(ce_per_art)       # [N_art]
+    if art_weights is not None:
+        ce_per_art = ce_per_art * art_weights.to(dev)
+
+    return ce_per_art.mean()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -106,19 +128,21 @@ def task2_loss(
 # ──────────────────────────────────────────────────────────────────────────────
 
 def multi_task_loss(
-    preds:  dict,
-    batch:  dict,
-    lam:    tuple[float, float, float] = (1.0, 1.0, 1.0),
-    device: torch.device | None = None,
+    preds:          dict,
+    batch:          dict,
+    lam:            tuple[float, float, float] = (1.0, 1.0, 1.0),
+    device:         torch.device | None = None,
+    task1a_weights: tuple | None = None,
 ) -> tuple[torch.Tensor, dict]:
     """
     Agrège les trois losses.
 
     Args:
-        preds  : sortie de BrainFMLISA.forward()
-        batch  : dict du DataLoader
-        lam    : (λ_1a, λ_1b, λ_2)  poids des tâches
-        device : device cible (inféré depuis preds si None)
+        preds          : sortie de BrainFMLISA.forward()
+        batch          : dict du DataLoader
+        lam            : (λ_1a, λ_1b, λ_2)  poids des tâches
+        device         : device cible (inféré depuis preds si None)
+        task1a_weights : (sev_weights [N_art,N_sev], art_weights [N_art]) ou None
 
     Returns:
         (total_loss, dict des losses individuelles)
@@ -131,11 +155,14 @@ def multi_task_loss(
 
     # ── Task 1a : quality control ────────────────────────────────────────────
     if "task1a" in preds:
-        mask_1a = batch["has_task1a"].to(device)
+        mask_1a  = batch["has_task1a"].to(device)
+        sev_w, art_w = task1a_weights if task1a_weights is not None else (None, None)
         l1a = task1a_loss(
             preds["task1a"],
             batch["task1a_labels"].to(device),
             mask_1a,
+            sev_weights=sev_w,
+            art_weights=art_w,
         )
         losses["task1a"] = l1a
         total = total + lam[0] * l1a

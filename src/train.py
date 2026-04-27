@@ -26,7 +26,7 @@ import torch.optim as optim
 import yaml
 from torch.utils.data import DataLoader
 
-from dataset import LISAJointDataset, DATA_ROOT_DEFAULT
+from dataset import LISAJointDataset, DATA_ROOT_DEFAULT, compute_task1a_weights
 from losses import multi_task_loss
 from model import BrainFMLISA
 
@@ -176,7 +176,7 @@ def _zero_metrics():
     return {"task1a": 0.0, "task1b": 0.0, "task2": 0.0, "total": 0.0}
 
 
-def train_epoch(model, loader, optimizer, device, lam, debug=False):
+def train_epoch(model, loader, optimizer, device, lam, task1a_weights=None, debug=False):
     model.train()
     metrics = _zero_metrics()
     n = 0
@@ -187,7 +187,7 @@ def train_epoch(model, loader, optimizer, device, lam, debug=False):
 
         x = batch["image"].to(device)
         preds = model(x)
-        loss, losses = multi_task_loss(preds, batch, lam, device)
+        loss, losses = multi_task_loss(preds, batch, lam, device, task1a_weights)
 
         optimizer.zero_grad()
         loss.backward()
@@ -215,7 +215,7 @@ def train_epoch(model, loader, optimizer, device, lam, debug=False):
 
 
 @torch.no_grad()
-def val_epoch(model, loader, device, lam, debug=False):
+def val_epoch(model, loader, device, lam, task1a_weights=None, debug=False):
     model.eval()
     metrics = _zero_metrics()
     n = 0
@@ -226,7 +226,7 @@ def val_epoch(model, loader, device, lam, debug=False):
 
         x = batch["image"].to(device)
         preds = model(x)
-        _, losses = multi_task_loss(preds, batch, lam, device)
+        _, losses = multi_task_loss(preds, batch, lam, device, task1a_weights)
 
         for k in metrics:
             v = losses.get(k, torch.tensor(0.0))
@@ -272,6 +272,19 @@ def main():
     )
     print(f"Train : {len(train_ds)} items | Val : {len(val_ds)} items")
 
+    # ── poids de classe Task 1a (calculés sur le train set uniquement) ────────
+    t1a_sev_w, t1a_art_w = compute_task1a_weights(
+        train_ds.items,
+        n_artifacts=cfg["n_artifacts"],
+        n_severity=cfg["n_severity"],
+    )
+    task1a_weights = (t1a_sev_w, t1a_art_w)
+    print("Task 1a class weights (sévérité, moyennés sur artefacts) :")
+    for a, name in enumerate(["Noise","Zipper","Positioning","Banding","Motion","Contrast","Distortion"]):
+        w = t1a_sev_w[a].numpy()
+        print(f"  {name:12s}  sev0={w[0]:.2f}  sev1={w[1]:.2f}  sev2={w[2]:.2f}  "
+              f"art_w={t1a_art_w[a].item():.2f}")
+
     pin = device.type == "cuda"
     train_dl = DataLoader(
         train_ds, batch_size=cfg["batch_size"], shuffle=True,
@@ -316,8 +329,8 @@ def main():
     for epoch in range(start_epoch, epochs):
         t0 = time.time()
 
-        tr = train_epoch(model, train_dl, optimizer, device, lam, cfg["debug"])
-        vl = val_epoch(model, val_dl, device, lam, cfg["debug"])
+        tr = train_epoch(model, train_dl, optimizer, device, lam, task1a_weights, cfg["debug"])
+        vl = val_epoch(model, val_dl, device, lam, task1a_weights, cfg["debug"])
         scheduler.step()
 
         dt = time.time() - t0

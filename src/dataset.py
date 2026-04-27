@@ -96,6 +96,71 @@ def normalize(data: np.ndarray) -> np.ndarray:
     return np.clip(data, 0, p99) / p99
 
 
+import torch as _torch  # noqa: E402 — import local pour éviter une dépendance circulaire
+
+
+def compute_task1a_weights(
+    items: list,
+    n_artifacts: int = N_ARTIFACTS,
+    n_severity:  int = 3,
+) -> tuple:
+    """
+    Calcule deux tenseurs de pondération pour corriger le déséquilibre de la
+    loss Task 1a :
+
+    sev_weights : Tensor [N_art, N_sev]
+        Poids par sévérité pour chaque artefact (inverse de fréquence,
+        normalisé par artefact → somme = N_sev).
+        À passer comme ``weight`` à ``F.cross_entropy``.
+
+    art_weights : Tensor [N_art]
+        Poids par type d'artefact (inverse du taux d'activité, normalisé
+        → moyenne = 1).
+        Les artefacts rares (ex. Banding) obtiennent un poids plus élevé.
+
+    Args:
+        items       : liste des items du split d'entraînement (``train_ds.items``)
+        n_artifacts : nombre de types d'artefacts (défaut : 7)
+        n_severity  : nombre de classes de sévérité (défaut : 3)
+
+    Returns:
+        (sev_weights, art_weights)
+    """
+    task1a_items = [it for it in items if it.get("has_task1a", False)]
+    N = len(task1a_items)
+
+    if N == 0:
+        return (
+            _torch.ones(n_artifacts, n_severity, dtype=_torch.float32),
+            _torch.ones(n_artifacts,              dtype=_torch.float32),
+        )
+
+    labels = np.stack([it["task1a_labels"] for it in task1a_items])
+    # labels : [N, N_art], valeurs 0 / 1 / 2
+
+    # ── poids de sévérité (intra-artefact) ───────────────────────────────────
+    sev_w = np.zeros((n_artifacts, n_severity), dtype=np.float32)
+    for a in range(n_artifacts):
+        for s in range(n_severity):
+            cnt = int((labels[:, a] == s).sum())
+            sev_w[a, s] = N / (max(cnt, 1) * n_severity)
+        # normaliser → somme = n_severity (convention PyTorch "weight" pour CE)
+        sev_w[a] *= n_severity / sev_w[a].sum()
+
+    # ── poids inter-artefact ──────────────────────────────────────────────────
+    art_w = np.zeros(n_artifacts, dtype=np.float32)
+    for a in range(n_artifacts):
+        active = int((labels[:, a] > 0).sum())
+        art_w[a] = N / max(active, 1) / n_artifacts
+    # normaliser → moyenne = 1
+    art_w = art_w / art_w.mean()
+
+    return (
+        _torch.from_numpy(sev_w),
+        _torch.from_numpy(art_w),
+    )
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Dataset
 # ──────────────────────────────────────────────────────────────────────────────
