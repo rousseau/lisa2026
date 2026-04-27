@@ -80,6 +80,7 @@ def collect_files(data_root: Path) -> pd.DataFrame:
             "has_lf_seg": has_lf_seg,
             "has_hf_seg": has_hf_seg,
             "has_ciso": has_ciso,
+            "has_ciso_with_seg": has_ciso and has_hf_seg,
         })
     return pd.DataFrame(rows)
 
@@ -131,34 +132,66 @@ def main():
 
     # ── 2. Sujets uniques par split ───────────────────────────────────────────
     section("2. Sujets uniques par split")
+    rows_split = []
     for split, grp in df.groupby("split"):
-        n_sub = grp["subject"].nunique()
-        n_lf_seg = grp[grp["has_lf_seg"]]["subject"].nunique()
-        n_hf_seg = grp[grp["has_hf_seg"]]["subject"].nunique()
-        n_ciso   = grp[grp["has_ciso"]]["subject"].nunique()
+        n_sub            = grp["subject"].nunique()
+        n_lf_seg         = grp[grp["has_lf_seg"]]["subject"].nunique()
+        n_hf_seg         = grp[grp["has_hf_seg"]]["subject"].nunique()
+        n_ciso           = grp[grp["has_ciso"]]["subject"].nunique()
+        n_ciso_with_seg  = grp[grp["has_ciso_with_seg"]]["subject"].nunique()
         print(f"  [{split:15s}]  sujets: {n_sub:4d}  "
-              f"LF_seg: {n_lf_seg:4d}  HF_seg: {n_hf_seg:4d}  ciso: {n_ciso:4d}")
+              f"LF_seg: {n_lf_seg:4d}  HF_seg: {n_hf_seg:4d}  "
+              f"ciso: {n_ciso:4d}  ciso+seg: {n_ciso_with_seg:4d}")
+        rows_split.append({"split": split, "n_subjects": n_sub,
+                           "n_lf_seg": n_lf_seg, "n_hf_seg": n_hf_seg,
+                           "n_ciso": n_ciso, "n_ciso_with_seg": n_ciso_with_seg})
+    pd.DataFrame(rows_split).to_csv(RESULTS_DIR / "subjects_per_split.csv", index=False)
 
     # ── 3. Headers NIfTI (shapes + voxel sizes) ───────────────────────────────
     if not args.no_nifti:
         section("3. Dimensions et tailles de voxels par orientation (Training, 5 premiers sujets)")
         train_df = df[df["split"].isin(["train_seg", "train_seg_hf"])]
+        rows_hdr = []
         for orient in ORIENTATIONS:
             sub_orient = train_df[train_df["orientation"] == orient].head(5)
-            subsection(f"Orientation : {orient}")
+            subsection(f"Orientation LF : {orient}")
             shapes, zooms_list = [], []
             for _, row in sub_orient.iterrows():
                 info = nifti_info(row["filepath"])
                 shapes.append(info["shape"])
                 zooms_list.append(info["zooms"])
                 print(f"    {row['subject']:25s}  shape={info['shape']}  zooms={info['zooms']}")
-            # résumé
+                rows_hdr.append({"type": f"LF_{orient}", "subject": row["subject"],
+                                 "shape": str(info["shape"]), "zooms": str(info["zooms"])})
             shapes_arr = np.array(shapes)
             zooms_arr  = np.array(zooms_list)
             if len(shapes_arr):
                 print(f"  Shape min/max : {tuple(shapes_arr.min(0))} / {tuple(shapes_arr.max(0))}")
                 print(f"  Zooms min/max : {tuple(zooms_arr.min(0).round(3))} / "
                       f"{tuple(zooms_arr.max(0).round(3))}")
+
+        # ── Images ciso (isotropiques HF) ────────────────────────────────────
+        subsection("Images ciso (isotropiques HF) — tous les sujets")
+        ciso_subjects = df[df["has_ciso"] & (df["orientation"] == "axi")]["subject"].unique()
+        shapes_c, zooms_c = [], []
+        for subj in sorted(ciso_subjects)[:5]:
+            ciso_path = str(data_root / f"{subj}_ciso.nii.gz")
+            info = nifti_info(ciso_path)
+            shapes_c.append(info["shape"])
+            zooms_c.append(info["zooms"])
+            has_seg = (data_root / f"{subj}_seg.nii.gz").exists()
+            print(f"    {subj:25s}  shape={info['shape']}  zooms={info['zooms']}  seg={'✓' if has_seg else '✗'}")
+            rows_hdr.append({"type": "ciso", "subject": subj,
+                             "shape": str(info["shape"]), "zooms": str(info["zooms"])})
+        if len(shapes_c):
+            sa = np.array(shapes_c); za = np.array(zooms_c)
+            print(f"  Shape min/max : {tuple(sa.min(0))} / {tuple(sa.max(0))}")
+            print(f"  Zooms min/max : {tuple(za.min(0).round(3))} / {tuple(za.max(0).round(3))}")
+        n_ciso_total = len(ciso_subjects)
+        n_ciso_seg   = sum(1 for s in ciso_subjects
+                          if (data_root / f"{s}_seg.nii.gz").exists())
+        print(f"  Total ciso : {n_ciso_total}  dont avec seg : {n_ciso_seg}")
+        pd.DataFrame(rows_hdr).to_csv(RESULTS_DIR / "nifti_headers_sample.csv", index=False)
 
     # ── 4. Analyse du CSV Task 1a ─────────────────────────────────────────────
     section("4. Task 1a — distribution des artefacts")
@@ -208,25 +241,39 @@ def main():
     # ── 6. Statistiques de segmentation (Task 2) ─────────────────────────────
     if not args.no_nifti:
         section("6. Segmentation (Task 2) — volumes par structure (5 premiers sujets)")
-        seg_subjects = df[df["has_lf_seg"] & (df["orientation"] == "axi")].head(5)
         rows_seg = []
-        for _, row in seg_subjects.iterrows():
-            seg_path = data_root / f"{row['subject']}_LF_seg.nii.gz"
+
+        def analyse_seg(seg_path: Path, subj: str, seg_type: str):
             img = nib.load(str(seg_path))
             seg_data = np.asarray(img.dataobj, dtype=np.int16)
             zooms = img.header.get_zooms()[:3]
             vox_vol_mm3 = float(np.prod(zooms))
             unique_labels = np.unique(seg_data[seg_data > 0])
-            print(f"\n  {row['subject']}  labels présents: {list(unique_labels)}")
+            print(f"\n  [{seg_type}] {subj}  labels: {list(unique_labels)}")
             for lbl, name in SEG_LABELS.items():
                 vol_vox = int((seg_data == lbl).sum())
                 vol_mm3 = round(vol_vox * vox_vol_mm3, 1)
                 if vol_vox > 0:
                     print(f"    [{lbl:2d}] {name:20s} : {vol_vox:6d} vox  ({vol_mm3:.1f} mm³)")
-                rows_seg.append({
-                    "subject": row["subject"], "label": lbl, "name": name,
-                    "vol_vox": vol_vox, "vol_mm3": vol_mm3
-                })
+                rows_seg.append({"subject": subj, "seg_type": seg_type,
+                                 "label": lbl, "name": name,
+                                 "vol_vox": vol_vox, "vol_mm3": vol_mm3})
+
+        subsection("Segmentations LF (_LF_seg)")
+        lf_seg_subjects = df[df["has_lf_seg"] & (df["orientation"] == "axi")].head(5)
+        for _, row in lf_seg_subjects.iterrows():
+            analyse_seg(data_root / f"{row['subject']}_LF_seg.nii.gz",
+                        row["subject"], "LF_seg")
+
+        subsection("Segmentations HF (_seg) des sujets ciso")
+        ciso_seg_subjects = (
+            df[df["has_ciso_with_seg"] & (df["orientation"] == "axi")]
+            .head(5)
+        )
+        for _, row in ciso_seg_subjects.iterrows():
+            analyse_seg(data_root / f"{row['subject']}_seg.nii.gz",
+                        row["subject"], "HF_seg")
+
         pd.DataFrame(rows_seg).to_csv(RESULTS_DIR / "seg_volumes_sample.csv", index=False)
 
     # ── 7. Statistiques d'intensité (5 premiers sujets training) ─────────────
@@ -234,24 +281,42 @@ def main():
         section("7. Statistiques d'intensité par orientation (5 premiers sujets)")
         train_df = df[df["split"] == "train_seg"]
         rows_int = []
+
+        def intensity_stats(path: str, subj: str, img_type: str) -> dict:
+            img = nib.load(path)
+            data = np.asarray(img.dataobj, dtype=np.float32)
+            return {
+                "subject": subj, "type": img_type,
+                "mean": float(np.mean(data)), "std": float(np.std(data)),
+                "min": float(np.min(data)), "max": float(np.max(data)),
+                "p5":  float(np.percentile(data, 5)),
+                "p95": float(np.percentile(data, 95)),
+            }
+
         for orient in ORIENTATIONS:
             sub = train_df[train_df["orientation"] == orient].head(5)
-            print(f"\n  {orient.upper()}")
+            print(f"\n  LF {orient.upper()}")
             for _, row in sub.iterrows():
-                img = nib.load(row["filepath"])
-                data = np.asarray(img.dataobj, dtype=np.float32)
-                stats = {
-                    "subject": row["subject"], "orientation": orient,
-                    "mean": float(np.mean(data)), "std": float(np.std(data)),
-                    "min": float(np.min(data)), "max": float(np.max(data)),
-                    "p5":  float(np.percentile(data, 5)),
-                    "p95": float(np.percentile(data, 95)),
-                }
+                s = intensity_stats(row["filepath"], row["subject"], f"LF_{orient}")
                 print(f"    {row['subject']:25s}  "
-                      f"mean={stats['mean']:.1f}  std={stats['std']:.1f}  "
-                      f"min={stats['min']:.0f}  max={stats['max']:.0f}  "
-                      f"[p5={stats['p5']:.1f}, p95={stats['p95']:.1f}]")
-                rows_int.append(stats)
+                      f"mean={s['mean']:.1f}  std={s['std']:.1f}  "
+                      f"min={s['min']:.0f}  max={s['max']:.0f}  "
+                      f"[p5={s['p5']:.1f}, p95={s['p95']:.1f}]")
+                rows_int.append(s)
+
+        subsection("Images ciso (isotropiques HF) — 5 premiers sujets")
+        ciso_subjects = sorted(
+            df[df["has_ciso"] & (df["orientation"] == "axi")]["subject"].unique()
+        )[:5]
+        for subj in ciso_subjects:
+            ciso_path = str(data_root / f"{subj}_ciso.nii.gz")
+            s = intensity_stats(ciso_path, subj, "ciso")
+            print(f"    {subj:25s}  "
+                  f"mean={s['mean']:.1f}  std={s['std']:.1f}  "
+                  f"min={s['min']:.0f}  max={s['max']:.0f}  "
+                  f"[p5={s['p5']:.1f}, p95={s['p95']:.1f}]")
+            rows_int.append(s)
+
         pd.DataFrame(rows_int).to_csv(RESULTS_DIR / "intensity_stats_sample.csv", index=False)
 
     print()
