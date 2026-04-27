@@ -1,0 +1,38 @@
+# ── Données lourdes (jamais versionnées) ────────────────────────────────────
+outputs/          # images, prédictions, checkpoints générés localement
+*.nii
+*.nii.gz
+*.npy
+*.npz
+*.h5
+*.hdf5
+*.pt
+*.pth
+*.ckpt
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+*.so
+.env
+.venv
+venv/
+
+# ── Jupyter ──────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── LaTeX ────────────────────────────────────────────────────────────────────
+paper/*.aux
+paper/*.log
+paper/*.out
+paper/*.toc
+paper/*.pdf
+
+# ── macOS ────────────────────────────────────────────────────────────────────
+.DS_Store
+._.DS_Store
