@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 import torch.optim as optim
 import yaml
 from torch.utils.data import DataLoader
@@ -83,6 +84,10 @@ def load_config(cli_args: argparse.Namespace) -> dict:
         "lam1a":         t.get("lam1a",        1.0),
         "lam1b":         t.get("lam1b",        1.0),
         "lam2":          t.get("lam2",         1.0),
+        "label_smoothing":         t.get("label_smoothing",      0.0),
+        "early_stopping_patience": t.get("early_stopping_patience", 0),
+        "lr_encoder_scale":        t.get("lr_encoder_scale",     1.0),
+        "augment":                 t.get("augment",             False),
         "scheduler_tmax": sched.get("T_max",   None),
         # matériel
         "device":        yaml_cfg.get("device", "auto"),
@@ -169,6 +174,30 @@ def parse_args():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Augmentation (train uniquement)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _augment(x: torch.Tensor) -> torch.Tensor:
+    """
+    Augmentations légères sur un batch d'images [B, 1, D, H, W] ∈ [0, 1].
+      - Flip aléatoire sur chaque axe spatial (p=0.5)
+      - Bruit gaussien additif (σ ~ Uniform(0, 0.02))
+      - Scaling d'intensité (×u, u ~ Uniform(0.9, 1.1))
+    """
+    # flips (in-place safe car pas de gradient requis pendant augmentation)
+    for dim in (2, 3, 4):
+        if torch.rand(1).item() < 0.5:
+            x = x.flip(dim)
+    # bruit gaussien
+    sigma = torch.rand(1).item() * 0.02
+    x = x + sigma * torch.randn_like(x)
+    # scaling d'intensité
+    scale = 0.9 + torch.rand(1).item() * 0.2
+    x = x * scale
+    return x.clamp(0.0, 1.0)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Boucles train / val
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -176,7 +205,8 @@ def _zero_metrics():
     return {"task1a": 0.0, "task1b": 0.0, "task2": 0.0, "total": 0.0}
 
 
-def train_epoch(model, loader, optimizer, device, lam, task1a_weights=None, debug=False):
+def train_epoch(model, loader, optimizer, device, lam,
+                task1a_weights=None, label_smoothing=0.0, augment=False, debug=False):
     model.train()
     metrics = _zero_metrics()
     n = 0
@@ -186,8 +216,12 @@ def train_epoch(model, loader, optimizer, device, lam, task1a_weights=None, debu
             break
 
         x = batch["image"].to(device)
+        if augment:
+            x = _augment(x)
         preds = model(x)
-        loss, losses = multi_task_loss(preds, batch, lam, device, task1a_weights)
+        loss, losses = multi_task_loss(
+            preds, batch, lam, device, task1a_weights, label_smoothing=label_smoothing,
+        )
 
         optimizer.zero_grad()
         loss.backward()
@@ -215,7 +249,7 @@ def train_epoch(model, loader, optimizer, device, lam, task1a_weights=None, debu
 
 
 @torch.no_grad()
-def val_epoch(model, loader, device, lam, task1a_weights=None, debug=False):
+def val_epoch(model, loader, device, lam, task1a_weights=None, label_smoothing=0.0, debug=False):
     model.eval()
     metrics = _zero_metrics()
     n = 0
@@ -226,7 +260,9 @@ def val_epoch(model, loader, device, lam, task1a_weights=None, debug=False):
 
         x = batch["image"].to(device)
         preds = model(x)
-        _, losses = multi_task_loss(preds, batch, lam, device, task1a_weights)
+        _, losses = multi_task_loss(
+            preds, batch, lam, device, task1a_weights, label_smoothing=label_smoothing,
+        )
 
         for k in metrics:
             v = losses.get(k, torch.tensor(0.0))
@@ -309,7 +345,24 @@ def main():
     print(f"Paramètres  : {n_params:,}")
 
     optimizer = optim.AdamW(
-        model.parameters(), lr=cfg["lr"], weight_decay=cfg["weight_decay"]
+        [
+            {
+                "params": model.encoder.parameters(),
+                "lr":     cfg["lr"] * cfg["lr_encoder_scale"],
+            },
+            {
+                "params": list(model.disentangle.parameters())
+                        + list(model.task1b.parameters())
+                        + list(model.task2.parameters()),
+                "lr":     cfg["lr"],
+            },
+            {
+                # Tête Task1a : LR plein pour favoriser son apprentissage
+                "params": model.task1a.parameters(),
+                "lr":     cfg["lr"],
+            },
+        ],
+        weight_decay=cfg["weight_decay"],
     )
     epochs   = 1 if cfg["debug"] else cfg["epochs"]
     t_max    = cfg["scheduler_tmax"] or epochs
@@ -325,12 +378,25 @@ def main():
 
     CKPT_DIR.mkdir(parents=True, exist_ok=True)
 
+    best_val_1a      = float("inf")
+    no_improve_count = 0
+    patience         = cfg["early_stopping_patience"]  # 0 = désactivé
+
     # ── boucle d'entraînement ─────────────────────────────────────────────────
     for epoch in range(start_epoch, epochs):
         t0 = time.time()
 
-        tr = train_epoch(model, train_dl, optimizer, device, lam, task1a_weights, cfg["debug"])
-        vl = val_epoch(model, val_dl, device, lam, task1a_weights, cfg["debug"])
+        tr = train_epoch(
+            model, train_dl, optimizer, device, lam, task1a_weights,
+            label_smoothing=cfg["label_smoothing"],
+            augment=cfg["augment"],
+            debug=cfg["debug"],
+        )
+        vl = val_epoch(
+            model, val_dl, device, lam, task1a_weights,
+            label_smoothing=cfg["label_smoothing"],
+            debug=cfg["debug"],
+        )
         scheduler.step()
 
         dt = time.time() - t0
@@ -363,6 +429,33 @@ def main():
                 ckpt_path,
             )
             print(f"  → checkpoint sauvegardé : {ckpt_path}")
+
+        # ── early stopping & best model ───────────────────────────────────────
+        if vl["task1a"] < best_val_1a:
+            best_val_1a      = vl["task1a"]
+            no_improve_count = 0
+            best_path = CKPT_DIR / "best_model.pt"
+            torch.save(
+                {
+                    "epoch":        epoch,
+                    "model":        model.state_dict(),
+                    "optimizer":    optimizer.state_dict(),
+                    "train_losses": tr,
+                    "val_losses":   vl,
+                    "config":       cfg,
+                },
+                best_path,
+            )
+            print(f"  → best model (val 1a={best_val_1a:.4f}) sauvegardé : {best_path}")
+        else:
+            no_improve_count += 1
+
+        if patience > 0 and no_improve_count >= patience:
+            print(
+                f"  [early stopping] aucune amélioration val task1a "
+                f"depuis {patience} époques. Arrêt à epoch {epoch + 1}."
+            )
+            break
 
         # visualisation
         do_viz = (
