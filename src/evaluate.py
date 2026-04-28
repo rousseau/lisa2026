@@ -42,10 +42,16 @@ DEFAULT_CONFIG = Path(__file__).parent.parent / "configs" / "train_default.yaml"
 # ──────────────────────────────────────────────────────────────────────────────
 
 @torch.no_grad()
-def collect_predictions(model, val_ds, device, batch_size=4, num_workers=4):
+def collect_predictions(model, val_ds, device, batch_size=4, num_workers=4,
+                        logit_adj_tau: float = 0.0,
+                        log_prior: "torch.Tensor | None" = None):
     """
     Retourne (y_true, y_pred) tenseurs [N, 7] long.
     Seuls les items ayant has_task1a=True sont conservés.
+
+    Si logit_adj_tau > 0 et log_prior est fourni, applique le Logit Adjustment :
+        logits[b, a, s] -= tau * log_prior[a, s]
+    avant le argmax, ce qui corrige le biais vers les classes majoritaires.
     """
     loader = DataLoader(
         val_ds, batch_size=batch_size, shuffle=False,
@@ -62,6 +68,11 @@ def collect_predictions(model, val_ds, device, batch_size=4, num_workers=4):
         x = batch["image"].to(device)
         preds = model(x)
         logits = preds["task1a"]          # [B, 7, 3]
+
+        # Logit Adjustment
+        if logit_adj_tau > 0.0 and log_prior is not None:
+            logits = logits - logit_adj_tau * log_prior.to(logits.device)
+
         pred_sev = logits.argmax(dim=2)   # [B, 7]  classe prédite
 
         all_true.append(batch["task1a_labels"][mask].cpu())
@@ -197,6 +208,11 @@ def main():
     p.add_argument("--batch-size", type=int, default=4)
     p.add_argument("--num-workers", type=int, default=4)
     p.add_argument("--device", default="auto")
+    p.add_argument(
+        "--logit-adj-tau", type=float, default=0.0,
+        help="Logit Adjustment : tau > 0 soustrait tau*log(prior) des logits avant argmax."
+             " tau=1.0 = correction complète du biais de classe (recommandé : 0.5–1.0).",
+    )
     args = p.parse_args()
 
     # ── chargement checkpoint ──────────────────────────────────────────────
@@ -252,10 +268,37 @@ def main():
     print(f"Modèle chargé — epoch {epoch_num}")
 
     # ── inférence ─────────────────────────────────────────────────────────
+    # Logit Adjustment : calcul du log-prior depuis le train set
+    log_prior = None
+    if args.logit_adj_tau > 0.0:
+        from dataset import compute_task1a_weights  # import local pour éviter la dépendance
+        train_ds_tmp = LISAJointDataset(
+            cfg["data_root"], target_size=ts, split="train",
+            val_fraction=cfg["val_fraction"],
+        )
+        n_art = cfg["n_artifacts"]
+        n_sev = cfg["n_severity"]
+        counts = torch.zeros(n_art, n_sev)
+        for it in train_ds_tmp.items:
+            if not it.get("has_task1a", False):
+                continue
+            for a in range(n_art):
+                s = int(it["task1a_labels"][a].item())
+                counts[a, s] += 1
+        counts = counts + 1e-6   # lissage de Laplace pour éviter log(0)
+        prior     = counts / counts.sum(dim=1, keepdim=True)
+        log_prior = torch.log(prior)   # [N_art, N_sev]
+        print(f"Logit Adjustment tau={args.logit_adj_tau} — log-prior par artefact :")
+        for a, name in enumerate(ARTIFACT_COLS):
+            lp = log_prior[a].numpy()
+            print(f"  {name:12s}  sev0={lp[0]:+.2f}  sev1={lp[1]:+.2f}  sev2={lp[2]:+.2f}")
+
     y_true, y_pred = collect_predictions(
         model, val_ds, device,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
+        logit_adj_tau=args.logit_adj_tau,
+        log_prior=log_prior,
     )
     print(f"Prédictions collectées : {len(y_true)} items")
 
