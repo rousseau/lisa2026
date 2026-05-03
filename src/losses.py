@@ -56,57 +56,57 @@ def _ordinal_emd_loss(
 
 
 def task1a_loss(
-    logits:          torch.Tensor,               # [B, N_art, N_sev]
+    logits:          torch.Tensor,               # [B, N_art, N_sev-1]
     labels:          torch.Tensor,               # [B, N_art]  long, valeurs 0/1/2
     mask:            torch.Tensor,               # [B] bool – échantillons avec labels Task1a
     sev_weights:     torch.Tensor | None = None, # [N_art, N_sev] poids de sévérité par artefact
-    art_weights:     torch.Tensor | None = None, # [N_art] poids inter-artefact
-    label_smoothing: float = 0.0,                # lissage de label (0 → désactivé)
-    ordinal_weight:  float = 0.0,                # fraction EMD ordinale (0=CE pure, 1=EMD pure)
+    art_weights:     torch.Tensor | None = None, # [N_art] poids inter-artefact,
+    label_smoothing: float = 0.0,                # lissage de label (0 → désactivé),
+    ordinal_weight:  float = 0.0,                # ignoré ici, on utilise la BCE ordinale
+    focal_gamma:     float = 0.0,                # focus factor (0 = désactivé)
+    focal_alpha:     torch.Tensor | None = None, # [N_sev] poids par sévérité pour focal
+    ohem_ratio:      float = 0.0,                # fraction d'exemples durs (0 = désactivé)
+    ohem_anneal:     bool = False,               # annealing du ratio OHEM
+    ohem_epoch:      int = 0,                    # epoch courant pour annealing
+    ohem_max_epoch:  int = 200,                  # epoch max pour annealing
+    ohem_min_ratio:  float = 0.1,                # ratio minimum OHEM
 ) -> torch.Tensor:
     """
-    Loss pondérée par artefact : mélange CE et EMD ordinale.
+    Loss pour classification ordinale via Binary Cross Entropy sur les seuils.
 
-    ``ordinal_weight`` contrôle la fraction Earth Mover's Distance :
-        L = (1 - ordinal_weight) * CE  +  ordinal_weight * EMD
-
-    L'EMD pénalise proportionnellement à la distance ordinale (0→2 coûte 2×
-    plus que 0→1), ce qui évite les modes dégénérés où le modèle prédit
-    systématiquement une classe minoritaire pour minimiser la CE pondérée.
+    On transforme le label y ∈ {0, 1, 2} en un vecteur binaire de seuils :
+        y=0  → [0, 0]
+        y=1  → [1, 0]
+        y=2  → [1, 1]
+    
+    La loss est la moyenne des BCE sur ces seuils.
     """
     if not mask.any():
-        return logits.sum() * 0.0   # gradient nul mais graph connecté
+        return logits.sum() * 0.0
 
     dev      = logits.device
-    logits_m = logits[mask]   # [M, N_art, N_sev]
+    logits_m = logits[mask]   # [M, N_art, N_sev-1]
     labels_m = labels[mask]   # [M, N_art]
-    N        = logits_m.shape[1]
+    N_art    = logits_m.shape[1]
+    N_sev_minus_1 = logits_m.shape[2]
 
-    ce_per_art  = []
-    emd_per_art = []
-    for a in range(N):
-        w = sev_weights[a].to(dev) if sev_weights is not None else None
-        ce_a = F.cross_entropy(
-            logits_m[:, a, :], labels_m[:, a],
-            weight=w, label_smoothing=label_smoothing,
-        )
-        ce_per_art.append(ce_a)
-        if ordinal_weight > 0.0:
-            emd_a = _ordinal_emd_loss(logits_m[:, a, :], labels_m[:, a], weight=w)
-            emd_per_art.append(emd_a)
+    # Transformation des labels en cibles binaires (seuils)
+    # target[m, a, k] = 1 si labels[m, a] >= k+1
+    target = torch.zeros_like(logits_m)
+    for k in range(N_sev_minus_1):
+        target[:, :, k] = (labels_m >= (k + 1)).float()
 
-    ce_stack = torch.stack(ce_per_art)            # [N_art]
-    if ordinal_weight > 0.0:
-        emd_stack = torch.stack(emd_per_art)      # [N_art]
-    else:
-        emd_stack = ce_stack
-
+    # BCE pondérée (avec logits pour compatibilité AMP)
+    loss_val = F.binary_cross_entropy_with_logits(logits_m, target, reduction='none') # [M, N_art, N_sev-1]
+    
+    # Moyenne par artefact et par échantillon
+    loss_per_art = loss_val.mean(dim=-1) # [M, N_art]
+    
     if art_weights is not None:
         aw = art_weights.to(dev)
-        ce_stack  = ce_stack  * aw
-        emd_stack = emd_stack * aw
-
-    return (1.0 - ordinal_weight) * ce_stack.mean() + ordinal_weight * emd_stack.mean()
+        loss_per_art = loss_per_art * aw
+        
+    return loss_per_art.mean()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -184,12 +184,19 @@ def multi_task_loss(
     task1a_weights: tuple | None = None,
     label_smoothing: float = 0.0,
     ordinal_weight:  float = 0.0,
+    focal_gamma:     float = 0.0,
+    focal_alpha:     torch.Tensor | None = None,
+    ohem_ratio:      float = 0.0,
+    ohem_anneal:     bool = False,
+    ohem_epoch:      int = 0,
+    ohem_max_epoch:  int = 200,
+    ohem_min_ratio:  float = 0.1,
 ) -> tuple[torch.Tensor, dict]:
     """
     Agrège les trois losses.
 
     Args:
-        preds          : sortie de BrainFMLISA.forward()
+        preds          : sortie de BackboneLISA.forward()
         batch          : dict du DataLoader
         lam            : (λ_1a, λ_1b, λ_2)  poids des tâches
         device         : device cible (inféré depuis preds si None)

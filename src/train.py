@@ -27,10 +27,12 @@ import torch.nn.functional as F
 import torch.optim as optim
 import yaml
 from torch.utils.data import DataLoader
+from torch.cuda.amp import GradScaler, autocast
+from torch.utils.tensorboard import SummaryWriter
 
 from dataset import LISAJointDataset, DATA_ROOT_DEFAULT, compute_task1a_weights
 from losses import multi_task_loss
-from model import BrainFMLISA
+from model import BackboneLISA
 
 RESULTS_DIR = Path(__file__).parent.parent / "results"
 
@@ -87,9 +89,15 @@ def load_config(cli_args: argparse.Namespace) -> dict:
         "lam2":          t.get("lam2",         1.0),
         "label_smoothing":         t.get("label_smoothing",      0.0),
         "ordinal_weight":           t.get("ordinal_weight",        0.0),
+        "focal_gamma":              t.get("focal_gamma",           0.0),
+        "focal_alpha":              t.get("focal_alpha",           None),
+        "ohem_ratio":               t.get("ohem_ratio",            0.0),
+        "ohem_anneal":              t.get("ohem_anneal",           False),
+        "ohem_min_ratio":           t.get("ohem_min_ratio",        0.1),
         "early_stopping_patience": t.get("early_stopping_patience", 0),
         "lr_encoder_scale":        t.get("lr_encoder_scale",     1.0),
         "augment":                 t.get("augment",             False),
+        "simulate_artifacts":      t.get("simulate_artifacts",  False),
         "scheduler_tmax": sched.get("T_max",   None),
         # matériel
         "device":        yaml_cfg.get("device", "auto"),
@@ -164,6 +172,14 @@ def parse_args():
     p.add_argument("--lam2",          type=float, default=None)
     p.add_argument("--device",        default=None)
     p.add_argument("--resume",        default=None, help="Chemin d'un checkpoint")
+    p.add_argument("--focal-gamma", type=float, default=None,
+                   help="Focal Loss gamma (0 = désactivé)")
+    p.add_argument("--ohem-ratio", type=float, default=None,
+                   help="OHEM hard-example ratio (0 = désactivé)")
+    p.add_argument("--ohem-anneal", action="store_true",
+                   help="Annealing OHEM ratio during training")
+    p.add_argument("--ohem-min-ratio", type=float, default=None,
+                   help="Minimum OHEM ratio for annealing")
     p.add_argument(
         "--debug", action="store_true",
         help="1 epoch, 4 batchs train / 2 batchs val — pour vérification rapide",
@@ -241,8 +257,11 @@ def _zero_metrics():
     return {"task1a": 0.0, "task1b": 0.0, "task2": 0.0, "total": 0.0}
 
 
-def train_epoch(model, loader, optimizer, device, lam,
+def train_epoch(model, loader, optimizer, device, lam, scaler, writer, epoch,
                 task1a_weights=None, label_smoothing=0.0, ordinal_weight=0.0,
+                focal_gamma=0.0, focal_alpha=None,
+                ohem_ratio=0.0, ohem_anneal=False, ohem_epoch=0,
+                ohem_max_epoch=200, ohem_min_ratio=0.1,
                 augment=False, debug=False):
     model.train()
     metrics = _zero_metrics()
@@ -255,16 +274,24 @@ def train_epoch(model, loader, optimizer, device, lam,
         x = batch["image"].to(device)
         if augment:
             x = _augment(x)
-        preds = model(x)
-        loss, losses = multi_task_loss(
-            preds, batch, lam, device, task1a_weights,
-            label_smoothing=label_smoothing, ordinal_weight=ordinal_weight,
-        )
-
+        
         optimizer.zero_grad()
-        loss.backward()
+        
+        with autocast():
+            preds = model(x)
+            loss, losses = multi_task_loss(
+                preds, batch, lam, device, task1a_weights,
+                label_smoothing=label_smoothing, ordinal_weight=ordinal_weight,
+                focal_gamma=focal_gamma, focal_alpha=focal_alpha,
+                ohem_ratio=ohem_ratio, ohem_anneal=ohem_anneal,
+                ohem_epoch=ohem_epoch, ohem_max_epoch=ohem_max_epoch, ohem_min_ratio=ohem_min_ratio,
+            )
+
+        scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
 
         for k in metrics:
             v = losses.get(k, torch.tensor(0.0))
@@ -288,7 +315,11 @@ def train_epoch(model, loader, optimizer, device, lam,
 
 @torch.no_grad()
 def val_epoch(model, loader, device, lam, task1a_weights=None,
-             label_smoothing=0.0, ordinal_weight=0.0, debug=False):
+             label_smoothing=0.0, ordinal_weight=0.0,
+             focal_gamma=0.0, focal_alpha=None,
+             ohem_ratio=0.0, ohem_anneal=False, ohem_epoch=0,
+             ohem_max_epoch=200, ohem_min_ratio=0.1,
+             debug=False, epoch=0):
     model.eval()
     metrics = _zero_metrics()
     n = 0
@@ -302,6 +333,9 @@ def val_epoch(model, loader, device, lam, task1a_weights=None,
         _, losses = multi_task_loss(
             preds, batch, lam, device, task1a_weights,
             label_smoothing=label_smoothing, ordinal_weight=ordinal_weight,
+            focal_gamma=focal_gamma, focal_alpha=focal_alpha,
+            ohem_ratio=ohem_ratio, ohem_anneal=ohem_anneal,
+            ohem_epoch=ohem_epoch, ohem_max_epoch=ohem_max_epoch, ohem_min_ratio=ohem_min_ratio,
         )
 
         for k in metrics:
@@ -331,16 +365,15 @@ def main():
     print(f"Config      : {cfg['config']}")
     print(f"Device      : {device}")
     print(f"Target size : {ts}")
-    print(
-        f"Disentangle : z_anat={cfg['c_anat']}  "
-        f"z_mod={cfg['c_mod']}  z_art={cfg['c_art']}"
-    )
+    print(f"Base ch     : {cfg['base_channels']}  "
+          f"(bottleneck={cfg['base_channels']*16}ch, feat={cfg['base_channels']}ch)")
     print(f"Debug mode  : {cfg['debug']}")
 
     # ── datasets ──────────────────────────────────────────────────────────────
     train_ds = LISAJointDataset(
         cfg["data_root"], target_size=ts, split="train",
         val_fraction=cfg["val_fraction"],
+        simulate_artifacts=cfg.get("simulate_artifacts", False),
     )
     val_ds = LISAJointDataset(
         cfg["data_root"], target_size=ts, split="val",
@@ -372,7 +405,7 @@ def main():
     )
 
     # ── modèle ────────────────────────────────────────────────────────────────
-    model = BrainFMLISA(
+    model = BackboneLISA(
         base=cfg["base_channels"],
         c_anat=cfg["c_anat"],
         c_mod=cfg["c_mod"],
@@ -387,11 +420,13 @@ def main():
     optimizer = optim.AdamW(
         [
             {
-                "params": model.encoder.parameters(),
+                # Encodeur partagé : LR réduit pour préserver les features bas-niveau
+                "params": model.backbone.encoder.parameters(),
                 "lr":     cfg["lr"] * cfg["lr_encoder_scale"],
             },
             {
-                "params": list(model.disentangle.parameters())
+                # Décodeur partagé + têtes Task1b/Task2 : LR plein
+                "params": list(model.backbone.decoder.parameters())
                         + list(model.task1b.parameters())
                         + list(model.task2.parameters()),
                 "lr":     cfg["lr"],
@@ -404,6 +439,8 @@ def main():
         ],
         weight_decay=cfg["weight_decay"],
     )
+    
+    scaler = GradScaler()
     epochs   = 1 if cfg["debug"] else cfg["epochs"]
     t_max    = cfg["scheduler_tmax"] or epochs
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=t_max)
@@ -422,14 +459,23 @@ def main():
     no_improve_count = 0
     patience         = cfg["early_stopping_patience"]  # 0 = désactivé
 
+    # ── TensorBoard ──────────────────────────────────────────────────────────
+    writer = SummaryWriter(log_dir=str(RESULTS_DIR / "logs"))
+
     # ── boucle d'entraînement ─────────────────────────────────────────────────
     for epoch in range(start_epoch, epochs):
         t0 = time.time()
 
         tr = train_epoch(
-            model, train_dl, optimizer, device, lam, task1a_weights,
+            model, train_dl, optimizer, device, lam, scaler, writer, epoch,
             label_smoothing=cfg["label_smoothing"],
             ordinal_weight=cfg["ordinal_weight"],
+            focal_gamma=cfg["focal_gamma"],
+            focal_alpha=torch.tensor(cfg["focal_alpha"]).to(device) if cfg["focal_alpha"] is not None else None,
+            ohem_ratio=cfg["ohem_ratio"],
+            ohem_anneal=cfg["ohem_anneal"],
+            ohem_max_epoch=epochs,
+            ohem_min_ratio=cfg["ohem_min_ratio"],
             augment=cfg["augment"],
             debug=cfg["debug"],
         )
@@ -437,11 +483,26 @@ def main():
             model, val_dl, device, lam, task1a_weights,
             label_smoothing=cfg["label_smoothing"],
             ordinal_weight=cfg["ordinal_weight"],
+            focal_gamma=cfg["focal_gamma"],
+            focal_alpha=torch.tensor(cfg["focal_alpha"]).to(device) if cfg["focal_alpha"] is not None else None,
+            ohem_ratio=cfg["ohem_ratio"],
+            ohem_anneal=cfg["ohem_anneal"],
+            ohem_max_epoch=epochs,
+            ohem_min_ratio=cfg["ohem_min_ratio"],
             debug=cfg["debug"],
+            epoch=epoch,
         )
         scheduler.step()
 
         dt = time.time() - t0
+        
+        # Log TensorBoard
+        for k in tr:
+            writer.add_scalar(f"Train/{k}", tr[k], epoch)
+        for k in vl:
+            writer.add_scalar(f"Val/{k}", vl[k], epoch)
+        writer.add_scalar("Train/Time_per_epoch", dt, epoch)
+
         print(
             f"Epoch {epoch + 1:3d}/{epochs}  "
             f"train[tot={tr['total']:.4f} 1a={tr['task1a']:.4f} "

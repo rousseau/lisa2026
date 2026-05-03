@@ -1,0 +1,38 @@
+/home/rousseau/miniforge3/lib/python3.13/site-packages/torch/cuda/__init__.py:435: UserWarning: 
+    Found GPU0 NVIDIA GB10 which is of cuda capability 12.1.
+    Minimum and Maximum cuda capability supported by this version of PyTorch is
+    (8.0) - (12.0)
+    
+  queued_call()
+Config      : configs/train_default.yaml
+Device      : cuda
+Target size : (96, 96, 96)
+Disentangle : z_anat=16  z_mod=8  z_art=8
+Debug mode  : False
+Train : 622 items | Val : 84 items
+Paramètres  : 8,259,108
+Epoch   1/100  train[tot=0.8968 1a=0.5750 1b=0.0389 seg=0.2829]  val[tot=0.4670 1a=0.3952 1b=0.0718 seg=0.0000]  160.4s
+Epoch   2/100  train[tot=0.7972 1a=0.5192 1b=0.0283 seg=0.2498]  val[tot=0.4637 1a=0.4108 1b=0.0529 seg=0.0000]  161.6s
+Epoch   3/100  train[tot=0.7590 1a=0.5126 1b=0.0228 seg=0.2236]  val[tot=0.4336 1a=0.3928 1b=0.0407 seg=0.0000]  160.9s
+Epoch   4/100  train[tot=0.7191 1a=0.5036 1b=0.0191 seg=0.1963]  val[tot=0.4177 1a=0.3827 1b=0.0350 seg=0.0000]  161.2s
+Epoch   5/100  train[tot=0.6935 1a=0.5060 1b=0.0164 seg=0.1710]  val[tot=0.4301 1a=0.3986 1b=0.0315 seg=0.0000]  160.6s
+Epoch   6/100  train[tot=0.6655 1a=0.5011 1b=0.0140 seg=0.1503]  val[tot=0.4499 1a=0.4245 1b=0.0254 seg=0.0000]  160.9s
+Epoch   7/100  train[tot=0.6462 1a=0.4997 1b=0.0128 seg=0.1337]  val[tot=0.4379 1a=0.4027 1b=0.0353 seg=0.0000]  161.7s
+Epoch   8/100  train[tot=0.6308 1a=0.4991 1b=0.0115 seg=0.1202]  val[tot=0.4049 1a=0.3832 1b=0.0217 seg=0.0000]  161.7s
+Epoch   9/100  train[tot=0.6167 1a=0.4944 1b=0.0108 seg=0.1115]  val[tot=0.3952 1a=0.3721 1b=0.0231 seg=0.0000]  161.1s
+Epoch  10/100  train[tot=0.6008 1a=0.4848 1b=0.0098 seg=0.1062]  val[tot=0.4255 1a=0.3986 1b=0.0270 seg=0.0000]  161.2s
+  → checkpoint sauvegardé : /home/rousseau/Exp/lisa2026/outputs/checkpoints/epoch_0010.pt
+Epoch  11/100  train[tot=0.5898 1a=0.4799 1b=0.0085 seg=0.1013]  val[tot=0.4044 1a=0.3852 1b=0.0192 seg=0.0000]  161.6s
+Epoch  12/100  train[tot=0.5843 1a=0.4784 1b=0.0085 seg=0.0974]  val[tot=0.3692 1a=0.3520 1b=0.0172 seg=0.0000]  164.3s
+Epoch  13/100  train[tot=0.5808 1a=0.4788 1b=0.0078 seg=0.0942]  val[tot=0.4024 1a=0.3860 1b=0.0164 seg=0.0000]  161.0s
+Epoch  14/100  train[tot=0.5660 1a=0.4698 1b=0.0075 seg=0.0888]  val[tot=0.3348 1a=0.3175 1b=0.0173 seg=0.0000]  161.3s
+Epoch  15/100  train[tot=0.5526 1a=0.4660 1b=0.0075 seg=0.0790]  val[tot=0.3334 1a=0.3138 1b=0.0196 seg=0.0000]  164.0s
+Epoch  16/100  train[tot=0.5384 1a=0.4587 1b=0.0069 seg=0.0729]  val[tot=0.3509 1a=0.3326 1b=0.0184 seg=0.0000]  161.1s
+Epoch  17/100  train[tot=0.5285 1a=0.4535 1b=0.0064 seg=0.0686]  val[tot=0.3575 1a=0.3439 1b=0.0136 seg=0.0000]  161.4s
+Epoch  18/100  train[tot=0.5228 1a=0.4508 1b=0.0065 seg=0.0654]  val[tot=0.3420 1a=0.3193 1b=0.0227 seg=0.0000]  161.7s
+Epoch  19/100  train[tot=0.5181 1a=0.4485 1b=0.0069 seg=0.0627]  val[tot=0.3854 1a=0.3624 1b=0.0231 seg=0.0000]  161.8s
+Epoch  20/100  train[tot=0.5120 1a=0.4459 1b=0.0063 seg=0.0598]  val[tot=0.3411 1a=0.3223 1b=0.0188 seg=0.0000]  161.4s
+  → checkpoint sauvegardé : /home/rousseau/Exp/lisa2026/outputs/checkpoints/epoch_0020.pt
+Epoch  21/100  train[tot=0.4917 1a=0.4293 1b=0.0057 seg=0.0567]  val[tot=0.3384 1a=0.3273 1b=0.0111 seg=0.0000]  161.4s
+Epoch  22/100  train[tot=0.4920 1a=0.4356 1b=0.0055 seg=0.0509]  val[tot=0.3451 1a=0.3349 1b=0.0102 seg=0.0000]  161.6s
+Epoch  23/100  train[tot=0.4854 1a=0.4318 1b=0.0061 seg=0.0475]  val[tot=0.4171 1a=0.3972 1b=0.0198 seg=0.0000]  282.2s

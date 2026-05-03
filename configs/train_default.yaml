@@ -20,8 +20,8 @@ data:
 # ── Architecture ──────────────────────────────────────────────────────────────
 model:
   # Largeur de base du UNet : le bottleneck aura base * 16 canaux.
-  # base=16 → bottleneck=256ch, ~8.4M paramètres (pour target_size=96).
-  base_channels: 16
+  # base=32 → bottleneck=512ch, feat=32ch, ~24M paramètres (pour target_size=96).
+  base_channels: 32
 
   # Canaux des sous-espaces disentangle (bottleneck → projection 1×1×1).
   # Réduire pour économiser la mémoire ; augmenter si le modèle est sous-paramétré.
@@ -54,10 +54,23 @@ training:
   # Régularisation Task 1a
   label_smoothing: 0.1        # lissage de label pour cross-entropy Task1a (0 = désactivé)
   ordinal_weight:  0.5        # fraction EMD ordinale dans la loss Task1a (0=CE pure, 1=EMD pure)
+
+  # Focal Loss — focus sur les exemples difficiles (Motion, Contrast)
+  focal_gamma:  2.0            # focus factor (0 = désactivé, 2.0 recommandé)
+  focal_alpha: [0.25, 0.5, 1.0]  # poids par sévérité : sev0 < sev1 < sev2
+
+  # OHEM — Online Hard Example Mining
+  ohem_ratio:  0.35           # fraction d'exemples durs au début
+  ohem_anneal: true            # décroît progressivement vers ohem_min_ratio
+  ohem_min_ratio: 0.10         # ratio minimum après annealing
+
   augment: true               # augmentations légères en train (flips, bruit, scaling, banding, zipper)
+  simulate_artifacts: false   # simulation TorchIO : Noise/Motion/Zipper/Banding/Contrast/Distortion
+                              # met à jour les labels → augmente les classes positives (sev>0)
+                              # activer pour v6+ (ralentit légèrement le chargement)
 
   # LR différentiel : l'encodeur partagé apprend plus lentement
-  lr_encoder_scale: 0.1       # lr_encodeur = lr * lr_encoder_scale
+  lr_encoder_scale: 1.0       # lr_encodeur = lr * lr_encoder_scale
 
   # Early stopping (0 = désactivé)
   early_stopping_patience: 30 # arrêt si val task1a ne s'améliore pas depuis N époques

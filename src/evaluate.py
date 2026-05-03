@@ -2,15 +2,20 @@
 """
 Évaluation Task 1a sur le split de validation — métriques LISA 2025.
 
-Les 5 métriques officielles (accuracy, F1, F2, precision, recall) sont
-calculées en mode BINAIRE par artefact :
-    positif  = artefact présent (sévérité > 0)
-    négatif  = artefact absent  (sévérité = 0)
+Deux modes disponibles (--mode) :
 
-Le score final est la moyenne des 5 métriques, moyennée sur les 7 artefacts.
+  weighted  [défaut] : métriques officielles LISA 2025
+    → F1, F2, Acc, Precision, Recall calculés avec average='weighted'
+      sur les 3 classes de sévérité (0/1/2) par artefact
+    → Mean5 = moyenne des 5 métriques, moyennée sur les 7 artefacts
+    → Comparable aux scores publiés (CGP=0.799, BRIQA≈0.799, UPF=0.777)
+
+  binary    : ancienne métrique (présence/absence artefact)
+    → positif = sévérité > 0, négatif = sévérité = 0
 
 Usage :
     python src/evaluate.py --checkpoint outputs/checkpoints/best_model.pt
+    python src/evaluate.py --checkpoint outputs/checkpoints/best_model.pt --mode binary
     python src/evaluate.py --checkpoint outputs/checkpoints/epoch_0010.pt --config configs/train_default.yaml
 """
 
@@ -32,7 +37,7 @@ from torch.utils.data import DataLoader
 SRC = Path(__file__).parent
 sys.path.insert(0, str(SRC))
 from dataset import LISAJointDataset, ARTIFACT_COLS, DATA_ROOT_DEFAULT
-from model import BrainFMLISA
+from model import BackboneLISA
 
 DEFAULT_CONFIG = Path(__file__).parent.parent / "configs" / "train_default.yaml"
 
@@ -67,13 +72,21 @@ def collect_predictions(model, val_ds, device, batch_size=4, num_workers=4,
             continue
         x = batch["image"].to(device)
         preds = model(x)
-        logits = preds["task1a"]          # [B, 7, 3]
+        logits = preds["task1a"]          # [B, 7, 2] (ordinal thresholds)
 
         # Logit Adjustment
         if logit_adj_tau > 0.0 and log_prior is not None:
-            logits = logits - logit_adj_tau * log_prior.to(logits.device)
+            # On ajuste les logits des seuils. 
+            # Pour simplifier, on applique l'ajustement sur les seuils 1 et 2.
+            # On suppose que log_prior est [N_art, 3]
+            # On utilise log_prior[a, 1] et log_prior[a, 2] pour ajuster les seuils.
+            adj = log_prior[:, 1:].to(logits.device) # [N_art, 2]
+            logits = logits - logit_adj_tau * adj.unsqueeze(0)
 
-        pred_sev = logits.argmax(dim=2)   # [B, 7]  classe prédite
+        # Conversion des seuils en classes (0, 1, 2)
+        # pred_sev = sum(sigmoid(logits) > 0.5)
+        probs = torch.sigmoid(logits)
+        pred_sev = (probs > 0.5).sum(dim=2)   # [B, 7]  classe prédite (0, 1 ou 2)
 
         all_true.append(batch["task1a_labels"][mask].cpu())
         all_pred.append(pred_sev[mask].cpu())
@@ -94,32 +107,59 @@ def fbeta_score(precision, recall, beta=1.0):
     return (1 + beta ** 2) * precision * recall / denom if denom > 0 else 0.0
 
 
-def compute_metrics_per_artifact(y_true: np.ndarray, y_pred: np.ndarray):
+# Scores de référence LISA 2025 — Task 1 (test set officiel)
+# Métrique : weighted average sur 3 classes (0/1/2), Mean5 = moy(F1,F2,Acc,Prec,Rec)
+# Source : proceedings LISA 2025
+LISA2025_REFERENCE = {
+    # rang : (équipe, institution, Mean5, weighted_F1)
+    1: ("CGP",   "Tsinghua Univ.",           0.799, 0.781),
+    2: ("BRIQA", "MBZ Univ.",                0.799, None),
+    5: ("UPF",   "Univ. Pompeu Fabra",       0.777, 0.771),
+    # BRIQA macro F1 par artefact (pour référence) :
+    # Noise=0.725 Zipper=0.731 Positioning=0.732 Banding=0.605
+    # Motion=0.625 Contrast=0.698 Distortion=0.657 → mean_macro_F1=0.706
+}
+
+
+def compute_metrics_per_artifact(y_true: np.ndarray, y_pred: np.ndarray,
+                                  mode: str = "weighted"):
     """
-    Calcule les 5 métriques binaires (présence/absence artefact) pour chaque
-    des 7 artefacts.
+    Calcule les 5 métriques pour chaque des 7 artefacts.
 
     Args:
         y_true : [N, 7]  sévérité GT   (0/1/2)
         y_pred : [N, 7]  sévérité pred (0/1/2)
+        mode   : 'weighted' (LISA 2025 officiel, 3 classes) ou 'binary'
 
     Returns:
         dict {artifact_name: {acc, f1, f2, prec, rec, mean5}}
     """
     results = {}
     for a, name in enumerate(ARTIFACT_COLS):
-        gt_bin   = (y_true[:, a] > 0).astype(int)   # 1 = artefact présent
-        pred_bin = (y_pred[:, a] > 0).astype(int)
-
-        # Éviter zéro division si une classe est absente en val
         kw = dict(zero_division=0)
 
-        acc  = accuracy_score(gt_bin, pred_bin)
-        prec = precision_score(gt_bin, pred_bin, **kw)
-        rec  = recall_score(gt_bin, pred_bin, **kw)
-        f1   = f1_score(gt_bin, pred_bin, **kw)
+        if mode == "binary":
+            gt   = (y_true[:, a] > 0).astype(int)
+            pred = (y_pred[:, a] > 0).astype(int)
+            avg  = "binary"
+        else:  # weighted — métrique officielle LISA 2025
+            gt   = y_true[:, a]
+            pred = y_pred[:, a]
+            avg  = "weighted"
+
+        acc  = accuracy_score(gt, pred)
+        prec = precision_score(gt, pred, average=avg, **kw)
+        rec  = recall_score(gt, pred, average=avg, **kw)
+        f1   = f1_score(gt, pred, average=avg, **kw)
         f2   = fbeta_score(prec, rec, beta=2.0)
         mean5 = (acc + f1 + f2 + prec + rec) / 5.0
+
+        if mode == "binary":
+            n_pos_gt   = int((gt   > 0).sum())
+            n_pos_pred = int((pred > 0).sum())
+        else:
+            n_pos_gt   = int((gt   > 0).sum())
+            n_pos_pred = int((pred > 0).sum())
 
         results[name] = {
             "accuracy":  acc,
@@ -128,18 +168,19 @@ def compute_metrics_per_artifact(y_true: np.ndarray, y_pred: np.ndarray):
             "precision": prec,
             "recall":    rec,
             "mean5":     mean5,
-            "n_pos_gt":  int(gt_bin.sum()),
-            "n_pos_pred":int(pred_bin.sum()),
-            "n_total":   len(gt_bin),
+            "n_pos_gt":  n_pos_gt,
+            "n_pos_pred":n_pos_pred,
+            "n_total":   len(gt),
         }
     return results
 
 
-def print_results(results: dict, checkpoint_name: str = ""):
+def print_results(results: dict, checkpoint_name: str = "", mode: str = "weighted"):
     """Affiche un tableau lisible et un résumé global."""
     header = f"{'Artifact':14s}  {'Acc':6s}  {'F1':6s}  {'F2':6s}  {'Prec':6s}  {'Rec':6s}  {'Mean5':6s}  {'Pos/GT':8s}"
     sep    = "-" * len(header)
-    title  = f"  Task 1a — métriques LISA (binaire par artefact)"
+    mode_label = "weighted 3-classes (LISA 2025 officiel)" if mode == "weighted" else "binaire (présent/absent)"
+    title  = f"  Task 1a — métriques {mode_label}"
     if checkpoint_name:
         title += f"  [{checkpoint_name}]"
 
@@ -173,20 +214,24 @@ def print_results(results: dict, checkpoint_name: str = ""):
         f"{np.mean(means['mean5']):.4f}"
     )
     print(avg_line)
+    our_mean5 = np.mean(means['mean5'])
     print(sep)
     print(
-        f"\n  Score global (mean of 5 metrics, mean over artifacts) : "
-        f"{np.mean(means['mean5']):.4f}"
+        f"\n  Score global (Mean5) : {our_mean5:.4f}"
     )
-    print()
 
-    # ── LISA 2025 best scores (scores numériques non publiés dans le HTML)
-    print(
-        "  Référence LISA 2025 — top-3 équipes (Task 1) :\n"
-        "    🥇 CGP  🥈 MBZ  🥉 UPF\n"
-        "    (scores numériques non accessibles via l'API Synapse statique)\n"
-        "    cf. https://www.synapse.org/Synapse:syn65670170/wiki/631796"
-    )
+    if mode == "weighted":
+        print()
+        print("  ── Comparaison LISA 2025 (test set officiel, même métrique weighted) ──")
+        print(f"  {'Rang':5s}  {'Équipe':8s}  {'Institution':26s}  {'Mean5':6s}  {'wF1':6s}")
+        print(f"  {'-'*5}  {'-'*8}  {'-'*26}  {'-'*6}  {'-'*6}")
+        for rang, (team, inst, m5, wf1) in sorted(LISA2025_REFERENCE.items()):
+            wf1_str = f"{wf1:.3f}" if wf1 is not None else "  — "
+            print(f"  {rang:<5d}  {team:<8s}  {inst:<26s}  {m5:.3f}   {wf1_str}")
+        print(f"  {'—':5s}  {'NOUS':8s}  {'(val set, pas test)':26s}  {our_mean5:.3f}")
+        print()
+        print("  Note : nos scores sont sur le VAL set local (≠ test set officiel LISA).")
+        print("         Les scores LISA 2025 ci-dessus sont sur le TEST set officiel.")
     print()
 
 
@@ -212,6 +257,12 @@ def main():
         "--logit-adj-tau", type=float, default=0.0,
         help="Logit Adjustment : tau > 0 soustrait tau*log(prior) des logits avant argmax."
              " tau=1.0 = correction complète du biais de classe (recommandé : 0.5–1.0).",
+    )
+    p.add_argument(
+        "--mode", choices=["weighted", "binary"], default="weighted",
+        help="Mode de calcul des métriques : "
+             "'weighted' = LISA 2025 officiel (average='weighted' sur 3 classes 0/1/2) ; "
+             "'binary' = présence/absence artefact (ancienne métrique).",
     )
     args = p.parse_args()
 
@@ -254,7 +305,7 @@ def main():
     print(f"Val items Task1a : {len(task1a_items)}")
 
     # ── modèle ────────────────────────────────────────────────────────────
-    model = BrainFMLISA(
+    model = BackboneLISA(
         base=cfg["base_channels"],
         c_anat=cfg["c_anat"],
         c_mod=cfg["c_mod"],
@@ -303,8 +354,8 @@ def main():
     print(f"Prédictions collectées : {len(y_true)} items")
 
     # ── métriques ─────────────────────────────────────────────────────────
-    results = compute_metrics_per_artifact(y_true.numpy(), y_pred.numpy())
-    print_results(results, checkpoint_name=ckpt_path.name)
+    results = compute_metrics_per_artifact(y_true.numpy(), y_pred.numpy(), mode=args.mode)
+    print_results(results, checkpoint_name=ckpt_path.name, mode=args.mode)
 
     # ── distribution des prédictions ──────────────────────────────────────
     print("  Distribution des sévérités prédites vs GT :")

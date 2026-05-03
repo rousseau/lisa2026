@@ -36,7 +36,7 @@ from dataset import (
     normalize,
     resample_to_isotropic,
 )
-from model import BrainFMLISA
+from model import BackboneLISA
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -181,7 +181,7 @@ def main():
     target_size = (args.target_size,) * 3
 
     # ── chargement modèle ────────────────────────────────────────────────────
-    model = BrainFMLISA(base=args.base_channels).to(device)
+    model = BackboneLISA(base=args.base_channels).to(device)
     ckpt  = torch.load(args.checkpoint, map_location=device)
     model.load_state_dict(ckpt["model"])
     model.eval()

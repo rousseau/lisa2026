@@ -1,0 +1,74 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Configuration d'entraînement — LISA 2026 (modèle joint)
+#
+# Utilisation :
+#   python src/train.py --config configs/train_default.yaml
+#   python src/train.py --config configs/train_default.yaml --debug
+#   python src/train.py --config configs/train_default.yaml --epochs 200 --lr 5e-5
+#
+# Les arguments CLI surchargent les valeurs ci-dessous.
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Données ───────────────────────────────────────────────────────────────────
+data:
+  root:         /home/rousseau/Data/LISA2026
+  # Taille spatiale isotrope après resampling (cube N×N×N).
+  # Réduire si la VRAM est limitée (ex. 64 ou 80).
+  target_size:  96
+  val_fraction: 0.2          # fraction des sujets supervisés réservée à la validation
+
+# ── Architecture ──────────────────────────────────────────────────────────────
+model:
+  # Largeur de base du UNet : le bottleneck aura base * 16 canaux.
+  # base=32 → bottleneck=512ch, feat=32ch, ~24M paramètres (pour target_size=96).
+  base_channels: 32
+
+  # Canaux des sous-espaces disentangle (bottleneck → projection 1×1×1).
+  # Réduire pour économiser la mémoire ; augmenter si le modèle est sous-paramétré.
+  c_anat: 16    # espace anatomique (→ Task1b + Task2)
+  c_mod:   8    # espace modalité   (→ Task1b uniquement)
+  c_art:   8    # espace artefacts  (→ Task1a uniquement)
+
+  # Paramètres fixes (ne pas modifier sauf changement de dataset)
+  n_artifacts:   7    # nombre de types d'artefacts Task1a
+  n_severity:    3    # niveaux de sévérité : 0=aucun, 1=léger, 2=sévère
+  n_seg_classes: 14   # fond (0) + 13 structures Task2
+
+# ── Entraînement ──────────────────────────────────────────────────────────────
+training:
+  epochs:      200
+  batch_size:  4
+  num_workers: 4
+  save_every:  10    # sauvegarder un checkpoint toutes les N époques
+  viz_every:   10    # générer les figures PNG dans results/plots/ toutes les N époques
+
+  # Optimiseur AdamW
+  lr:           1.0e-4
+  weight_decay: 1.0e-5
+
+  # Poids des losses multi-tâches (λ_1a, λ_1b, λ_2)
+  lam1a: 1.0   # Task1a — quality control
+  lam1b: 1.0   # Task1b — enhancement
+  lam2:  1.0   # Task2  — segmentation
+
+  # Régularisation Task 1a
+  label_smoothing: 0.1        # lissage de label pour cross-entropy Task1a (0 = désactivé)
+  ordinal_weight:  0.5        # fraction EMD ordinale dans la loss Task1a (0=CE pure, 1=EMD pure)
+  augment: true               # augmentations légères en train (flips, bruit, scaling, banding, zipper)
+  simulate_artifacts: true    # simulation TorchIO : Noise/Motion/Zipper/Banding/Contrast/Distortion
+                              # met à jour les labels → augmente les classes positives (sev>0)
+                              # activer pour v6+ (ralentit légèrement le chargement)
+
+  # LR différentiel : l'encodeur partagé apprend plus lentement
+  lr_encoder_scale: 1.0       # lr_encodeur = lr * lr_encoder_scale
+
+  # Early stopping (0 = désactivé)
+  early_stopping_patience: 30 # arrêt si val task1a ne s'améliore pas depuis N époques
+
+  # Scheduler cosinus ; T_max est automatiquement mis à `epochs` si non défini.
+  scheduler:
+    type:  cosine
+    T_max: null   # null → utilise la valeur de epochs
+
+# ── Matériel ──────────────────────────────────────────────────────────────────
+device: auto   # "auto" → cuda si disponible, sinon cpu

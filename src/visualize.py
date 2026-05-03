@@ -27,7 +27,7 @@ import numpy as np
 import torch
 
 from dataset import LISAJointDataset, ARTIFACT_COLS, DATA_ROOT_DEFAULT
-from model import BrainFMLISA
+from model import BackboneLISA
 from train import load_config, parse_args as _parse_train_args
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -131,7 +131,7 @@ def plot_loss_curves(ckpt_dir: Path, out_path: Path) -> None:
 
 @torch.no_grad()
 def plot_task1b_samples(
-    model:    BrainFMLISA,
+    model:    BackboneLISA,
     val_ds:   LISAJointDataset,
     out_path: Path,
     device:   torch.device,
@@ -218,7 +218,7 @@ def plot_task1b_samples(
 
 @torch.no_grad()
 def plot_task2_samples(
-    model:    BrainFMLISA,
+    model:    BackboneLISA,
     val_ds:   LISAJointDataset,
     out_path: Path,
     device:   torch.device,
@@ -323,7 +323,7 @@ def plot_task2_samples(
 
 @torch.no_grad()
 def plot_task1a_confusion(
-    model:    BrainFMLISA,
+    model:    BackboneLISA,
     val_ds:   LISAJointDataset,
     out_path: Path,
     device:   torch.device,
@@ -388,7 +388,7 @@ def plot_task1a_confusion(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def visualize_all(
-    model:       BrainFMLISA,
+    model:       BackboneLISA,
     val_ds:      LISAJointDataset,
     ckpt_dir:    Path,
     results_dir: Path,
@@ -449,7 +449,7 @@ if __name__ == "__main__":
     print(f"Val dataset : {len(val_ds)} items")
 
     # Modèle
-    model = BrainFMLISA(
+    model = BackboneLISA(
         base=cfg["base_channels"],
         c_anat=cfg["c_anat"], c_mod=cfg["c_mod"], c_art=cfg["c_art"],
         n_artifacts=cfg["n_artifacts"], n_severity=cfg["n_severity"],
