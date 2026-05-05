@@ -21,9 +21,10 @@ import nibabel as nib
 import numpy as np
 import pandas as pd
 import torch
-import torchio as tio
 from scipy.ndimage import zoom
 from torch.utils.data import DataLoader, Dataset
+
+from augmentation import augment_artifact  # noqa: E402
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Constantes
@@ -340,263 +341,7 @@ class LISAJointDataset(Dataset):
         return len(self.items)
 
     # ── Simulation d'artefacts (TorchIO) ─────────────────────────────────────
-
-    @staticmethod
-    def _tio_subject(image: torch.Tensor) -> tio.Subject:
-        """Crée un Subject TorchIO depuis un tenseur [1, D, H, W].
-        TorchIO attend [C, W, H, D], on permute avant et après."""
-        return tio.Subject(image=tio.ScalarImage(tensor=image.permute(0, 3, 2, 1)))
-
-    @staticmethod
-    def _from_subject(subj: tio.Subject) -> torch.Tensor:
-        """Reconvertit Subject TorchIO → tenseur [1, D, H, W]."""
-        return subj.image.data.permute(0, 3, 2, 1).float().clamp(0.0, 1.0)
-
-    @staticmethod
-    def _simulate_zipper(
-        image: torch.Tensor, sev: int
-    ) -> torch.Tensor:
-        """
-        Simule l'artefact Zipper : bandes étroites discrètes (bright ou dark)
-        perpéndiculàres à l'axe d'encodage de phase.
-
-        Inspiré de l'équipe UPF LISA 2025 (ZipperArtifactSimulator) :
-          sev1 : 2-4 bandes, amplitude 0.2-0.4 (×std image)
-          sev2 : 4-8 bandes, amplitude 0.4-0.7 (×std image)
-
-        Le vrai artefact Zipper en IRM apparaît comme des raies claires/sombres
-        parallèles (interférence RF extérieure ou spike k-space discret).
-        """
-        vol = image[0].numpy().copy().astype(np.float64)  # [D, H, W]
-        D, H, W = vol.shape
-
-        direction = np.random.choice(['W', 'H'])
-        n_bands   = np.random.randint(2, 5) if sev == 1 else np.random.randint(4, 9)
-        img_std   = float(np.std(vol))
-        amp       = np.random.uniform(0.20, 0.40) if sev == 1 else np.random.uniform(0.40, 0.70)
-        amplitude = max(amp * img_std, 0.02)
-
-        # Positions des bandes constantes sur toutes les slices (caractéristique du Zipper)
-        coord_size    = W if direction == 'W' else H
-        band_thickness = max(1, int(coord_size * 0.012))
-        positions = [np.random.randint(0, max(1, coord_size - band_thickness)) for _ in range(n_bands)]
-        signs     = [1.0 if np.random.rand() > 0.4 else -1.0 for _ in range(n_bands)]
-
-        for pos, sign in zip(positions, signs):
-            noise = np.random.normal(0, amplitude * 0.15, vol.shape)
-            if direction == 'W':
-                vol[:, :, pos:pos + band_thickness] += sign * amplitude + noise[:, :, pos:pos + band_thickness]
-            else:
-                vol[:, pos:pos + band_thickness, :] += sign * amplitude + noise[:, pos:pos + band_thickness, :]
-
-        return torch.from_numpy(np.clip(vol, 0.0, 1.0).astype(np.float32)).unsqueeze(0)
-
-    @staticmethod
-    def _simulate_banding(
-        image: torch.Tensor, sev: int
-    ) -> torch.Tensor:
-        """
-        Simule l'artefact Banding : bandes localisées de sur/sous-intensité.
-
-        Calibration sur données LISA (images [0,1], std≈0.18) :
-          sev1 : 1-2 bandes, amplitude ±15-30 % dans 8-20 % de la dimension
-          sev2 : 2-4 bandes, amplitude ±30-55 % dans 8-20 % de la dimension
-
-        L'artefact Banding en IRM ULF (64mT) apparaît comme une ou plusieurs
-        bandes d'intensité uniformément sombre/lumineuse perpendiculaires à
-        l'axe de lecture (inhomogénéité B0/B1). L'implémentation UPF (LISA 2025)
-        remplace la région par du bruit haute intensité ; ici on utilise une
-        modulation multiplicative lisse (transition gaussienne aux bords) qui
-        préserve la structure anatomique tout en créant un contraste local.
-        """
-        img = image.numpy().copy()  # [1, D, H, W]
-
-        n_bands    = np.random.randint(1, 3) if sev == 1 else np.random.randint(2, 5)
-        width_frac = np.random.uniform(0.08, 0.20)
-        amp        = np.random.uniform(0.15, 0.30) if sev == 1 else np.random.uniform(0.30, 0.55)
-
-        # Axe de banding : 1=D (axial), 2=H (coronal), 3=W (sagittal)
-        ax  = np.random.randint(1, 4)
-        dim = img.shape[ax]
-        band_w = max(3, int(dim * width_frac))
-
-        for _ in range(n_bands):
-            pos = np.random.randint(0, max(1, dim - band_w))
-            # Profil gaussien (transition douce aux bords de la bande)
-            center    = pos + band_w / 2.0
-            sigma     = band_w / 4.0
-            coords    = np.arange(dim)
-            envelope  = np.exp(-0.5 * ((coords - center) / sigma) ** 2)
-
-            # Amplitude finale : bande sombre ou lumineuse
-            sign      = 1.0 if np.random.rand() > 0.5 else -1.0
-            modulator = 1.0 + sign * amp * envelope  # shape [dim]
-
-            # Broadcast selon l'axe choisi
-            shape = [1, 1, 1, 1]
-            shape[ax] = dim
-            modulator = modulator.reshape(shape)
-            img = np.clip(img * modulator, 0.0, 1.0)
-
-        return torch.from_numpy(img.astype(np.float32))
-
-    @staticmethod
-    def _simulate_contrast(
-        image: torch.Tensor, sev: int
-    ) -> torch.Tensor:
-        """
-        Simule l'artefact Contrast : réduction de la dynamique + biais de champ.
-
-        Calibration sur données LISA (images [0,1], std≈0.18, mean≈0.44) :
-          - real Contrast sev>0 : std≈0.162, mean≈0.514 (range plus étroit, décalé)
-          sev1 : RandomGamma(±0.3) + RandomBiasField(0.2) + compression 65 %
-          sev2 : RandomGamma(±0.5) + RandomBiasField(0.35) + compression 40 %
-
-        L'artefact Contrast en IRM ULF se manifeste par un manque de contraste
-        T1/T2 : les structures semblent « lavées », la dynamique est réduite,
-        et une inhomogénéité de champ ajoute un gradient d'intensité.
-        """
-        subj = LISAJointDataset._tio_subject(image)
-
-        if sev == 1:
-            subj = tio.RandomGamma(log_gamma=(-0.3, 0.3))(subj)
-            subj = tio.RandomBiasField(coefficients=0.20)(subj)
-            scale = np.random.uniform(0.55, 0.75)
-        else:
-            subj = tio.RandomGamma(log_gamma=(-0.5, 0.5))(subj)
-            subj = tio.RandomBiasField(coefficients=0.35)(subj)
-            scale = np.random.uniform(0.30, 0.50)
-
-        img_out = subj.image.data.permute(0, 3, 2, 1).float()
-        # Compression du range autour d'un pivot légèrement au-dessus de la moyenne
-        # (reproduit le décalage de mean observé dans les vraies images de Contrast)
-        pivot = img_out.mean() + 0.04
-        img_out = (pivot + (img_out - pivot) * scale).clamp(0.0, 1.0)
-        return img_out
-
-    def _simulate_artifact(
-        self,
-        image:  torch.Tensor,  # [1, D, H, W] float32, valeurs dans [0, 1]
-        labels: np.ndarray,    # [N_art] int64, valeurs 0/1/2
-    ) -> tuple[torch.Tensor, np.ndarray]:
-        """
-        Applique des transformations simulant des artefacts MRI.
-        Seuls les artefacts dont le label courant est 0 sont candidats.
-
-        Mapping ARTIFACT_COLS :
-          0=Noise  1=Zipper  2=Positioning  3=Banding  4=Motion  5=Contrast  6=Distortion
-
-        Sources :
-          - Noise/Zipper/Motion : paramètres BRIQA (LISA 2025, 2ème place)
-            BRIQA sev1 Motion = 5°, sev2 = 10° (vs Sundaresan 2024 : 3°/7°)
-          - Banding : bandes localisées, inspiré UPF (LISA 2025, 5ème place)
-          - Contrast : RandomGamma + RandomBiasField + rescaling, inspiré UPF
-          - Distortion : elastic + ghosting + spike, inspiré UPF
-        """
-        new_labels = labels.copy()
-
-        # ── Noise (idx=0) ─────────────────────────────────────────────────────
-        # Calibration BRIQA/Sundaresan : leurs images sont z-score (std≈1),
-        # std_noise=0.18-0.28 → équivalent [0,1] (std≈0.18) : std≈0.03-0.05
-        # Real Noise sev>0 dans LISA : std≈0.170 (< clean 0.179) → bruit réduit le contraste
-        # On ajoute donc un bruit modéré + légère dérivée de RandomBlur pour les sev élevés
-        if labels[0] == 0:
-            r = torch.rand(1).item()
-            if r < 0.12:    # sev=2
-                subj = self._tio_subject(image)
-                subj = tio.RandomNoise(std=(0.04, 0.08))(subj)
-                image = self._from_subject(subj)
-                new_labels[0] = 2
-            elif r < 0.35:  # sev=1
-                subj = self._tio_subject(image)
-                subj = tio.RandomNoise(std=(0.015, 0.04))(subj)
-                image = self._from_subject(subj)
-                new_labels[0] = 1
-
-        # ── Motion (idx=4) ────────────────────────────────────────────────────
-        # Paramètres BRIQA : sev1=5°/2mm, sev2=10°/5mm
-        # UPF utilise des valeurs plus fortes (10°/20°) mais BRIQA est plus proche
-        # de ce qui est observé dans ces IRM basse résolution
-        if labels[4] == 0:
-            r = torch.rand(1).item()
-            if r < 0.10:    # sev=2 : 7-10°
-                subj = self._tio_subject(image)
-                subj = tio.RandomMotion(
-                    degrees=10, translation=5, num_transforms=3
-                )(subj)
-                image = self._from_subject(subj)
-                new_labels[4] = 2
-            elif r < 0.25:  # sev=1 : 3-5°
-                subj = self._tio_subject(image)
-                subj = tio.RandomMotion(
-                    degrees=5, translation=2, num_transforms=2
-                )(subj)
-                image = self._from_subject(subj)
-                new_labels[4] = 1
-
-        # ── Zipper / Spike k-space (idx=1) ────────────────────────────────────
-        # Bandes discrètes perpéndiculàres à l'axe de phase (UPF ZipperArtifactSimulator).
-        # TorchIO RandomSpike crée un motif en damier (spike k-space = sinusoide 2D)
-        # qui ne représente pas correctement le zipper LISA (bandes parallèles discrètes).
-        if labels[1] == 0:
-            r = torch.rand(1).item()
-            if r < 0.10:    # sev=2
-                image = self._simulate_zipper(image, sev=2)
-                new_labels[1] = 2
-            elif r < 0.28:  # sev=1
-                image = self._simulate_zipper(image, sev=1)
-                new_labels[1] = 1
-
-        # ── Banding (idx=3) ───────────────────────────────────────────────────
-        # Bandes localisées (UPF) — PLUS RÉALISTE que RandomBiasField global
-        # Corrige le problème de v5 : le modèle ne voyait jamais de Banding sev>0
-        if labels[3] == 0:
-            r = torch.rand(1).item()
-            if r < 0.10:    # sev=2
-                image = self._simulate_banding(image, sev=2)
-                new_labels[3] = 2
-            elif r < 0.30:  # sev=1
-                image = self._simulate_banding(image, sev=1)
-                new_labels[3] = 1
-
-        # ── Contrast (idx=5) ──────────────────────────────────────────────────
-        # RandomGamma + RandomBiasField + compression du range (UPF)
-        if labels[5] == 0:
-            r = torch.rand(1).item()
-            if r < 0.10:    # sev=2
-                image = self._simulate_contrast(image, sev=2)
-                new_labels[5] = 2
-            elif r < 0.25:  # sev=1
-                image = self._simulate_contrast(image, sev=1)
-                new_labels[5] = 1
-
-        # ── Distortion / ElasticDeformation (idx=6) ───────────────────────────
-        # Elastic + Ghosting + Spike (UPF) — plus réaliste que elastic seul
-        if labels[6] == 0:
-            r = torch.rand(1).item()
-            if r < 0.08:    # sev=2
-                subj = self._tio_subject(image)
-                subj = tio.Compose([
-                    tio.RandomElasticDeformation(num_control_points=7, max_displacement=15.0),
-                    tio.RandomBiasField(coefficients=0.3, p=0.7),
-                    tio.RandomGhosting(num_ghosts=(1, 2), intensity=(0.1, 0.2), p=0.4),
-                    tio.RandomSpike(num_spikes=1, intensity=(0.1, 0.2), p=0.3),
-                ])(subj)
-                image = self._from_subject(subj)
-                new_labels[6] = 2
-            elif r < 0.20:  # sev=1
-                subj = self._tio_subject(image)
-                subj = tio.Compose([
-                    tio.RandomElasticDeformation(num_control_points=5, max_displacement=8.0),
-                    tio.RandomBiasField(coefficients=0.15, p=0.7),
-                    tio.RandomGhosting(num_ghosts=(1, 2), intensity=(0.05, 0.1), p=0.4),
-                ])(subj)
-                image = self._from_subject(subj)
-                new_labels[6] = 1
-
-        # Repositioning (idx=2) : non simulable sans infos de positionnement, ignoré.
-
-        return image, new_labels
+    # Délégué à augmentation.py (paramètres UPF/Sundaresan 2024).
 
     def __getitem__(self, idx: int) -> dict:
         it = self.items[idx]
@@ -608,17 +353,17 @@ class LISAJointDataset(Dataset):
         image = torch.from_numpy(data[None])  # [1, D, H, W] pleine résolution
 
         # ── Simulation d'artefacts sur le volume pleine résolution (avant crop) ─
+        # Délégué à augmentation.augment_artifact (paramètres UPF/Sundaresan 2024).
+        # Seuls les slots label==0 sont augmentés ; les annotations réelles sont
+        # préservées.  Le flag has_task1a est activé si des labels synthétiques
+        # sont générés sur une image non-annotée.
         has_task1a    = it["has_task1a"]
         task1a_labels = it["task1a_labels"].copy()   # np.ndarray [N_art]
 
         if self.simulate_artifacts and self.split == "train":
-            image, task1a_labels = self._simulate_artifact(image, task1a_labels)
-            # Activer has_task1a si des artefacts ont été simulés sur une image
-            # qui n'était pas dans le CSV task1a (labels synthétiques valides)
+            image, task1a_labels = augment_artifact(image, task1a_labels)
             if not has_task1a and task1a_labels.any():
                 has_task1a = True
-            # Si l'image était déjà annotée, ses labels synthétiques s'ajoutent
-            # aux vrais labels (on ne simule que les artefacts absents : label==0)
 
         # crop/pad vers la taille cible (après simulation)
         data = image.squeeze(0).numpy()
