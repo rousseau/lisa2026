@@ -18,7 +18,6 @@ Usage :
 """
 
 import argparse
-import math
 import time
 from pathlib import Path
 
@@ -27,10 +26,11 @@ import torch.nn.functional as F
 import torch.optim as optim
 import yaml
 from torch.utils.data import DataLoader
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 from torch.utils.tensorboard import SummaryWriter
 
 from dataset import LISAJointDataset, DATA_ROOT_DEFAULT, compute_task1a_weights
+from augmentation import augment_geometric
 from losses import multi_task_loss
 from model import BackboneLISA
 
@@ -98,6 +98,7 @@ def load_config(cli_args: argparse.Namespace) -> dict:
         "lr_encoder_scale":        t.get("lr_encoder_scale",     1.0),
         "augment":                 t.get("augment",             False),
         "simulate_artifacts":      t.get("simulate_artifacts",  False),
+        "compile":                 t.get("compile",             False),
         "scheduler_tmax": sched.get("T_max",   None),
         # matériel
         "device":        yaml_cfg.get("device", "auto"),
@@ -192,64 +193,6 @@ def parse_args():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Augmentation (train uniquement)
-# ──────────────────────────────────────────────────────────────────────────────
-
-def _augment(x: torch.Tensor) -> torch.Tensor:
-    """
-    Augmentations légères sur un batch d'images [B, 1, D, H, W] ∈ [0, 1].
-      - Flip gauche-droite uniquement (axe W, dim=4) (p=0.5)
-      - Bruit gaussien additif (σ ~ Uniform(0, 0.02))
-      - Scaling d'intensité (×u, u ~ Uniform(0.9, 1.1))
-      - Banding : modulation sinusoïdale basse fréquence dans la direction de phase (p=0.3)
-        Simule les bandes d'inhomogénéité B0/B1 typiques du 0.064T.
-      - Zipper : modulation haute fréquence dans la direction de fréquence (p=0.2)
-        Simule les lignes périodiques causées par une interférence RF parasitaire.
-    """
-    # flips (in-place safe car pas de gradient requis pendant augmentation)
-    if torch.rand(1).item() < 0.5:
-        x = x.flip(4)   # dim 4 = axe W (gauche-droite)
-    # bruit gaussien
-    sigma = torch.rand(1).item() * 0.02
-    x = x + sigma * torch.randn_like(x)
-    # scaling d'intensité
-    scale = 0.9 + torch.rand(1).item() * 0.2
-    x = x * scale
-
-    # ── Simulation banding ────────────────────────────────────────────────────
-    # Bandes sinusoïdales basse fréquence dans une direction de phase aléatoire.
-    # amplitude : 5–25% du signal, fréquence : 2–8 cycles sur le FOV.
-    if torch.rand(1).item() < 0.3:
-        phase_dim = int(torch.randint(2, 5, (1,)).item())   # 2=D, 3=H, 4=W
-        n   = x.shape[phase_dim]
-        amp = 0.05 + 0.20 * torch.rand(1).item()
-        freq = int(torch.randint(2, 9, (1,)).item())
-        phi = 2.0 * math.pi * torch.rand(1).item()
-        coords = torch.linspace(0.0, 1.0, n, device=x.device)
-        wave   = amp * torch.sin(2.0 * math.pi * freq * coords + phi)
-        shape  = [1, 1, 1, 1, 1]
-        shape[phase_dim] = n
-        x = x + wave.reshape(shape)
-
-    # ── Simulation zipper ─────────────────────────────────────────────────────
-    # Lignes brillantes/sombres haute fréquence (k = N/4 à N/2 cycles).
-    # amplitude : 2–8% du signal.
-    if torch.rand(1).item() < 0.2:
-        freq_dim = int(torch.randint(2, 5, (1,)).item())    # 2=D, 3=H, 4=W
-        n   = x.shape[freq_dim]
-        amp = 0.02 + 0.08 * torch.rand(1).item()
-        k   = int(torch.randint(n // 4, n // 2 + 1, (1,)).item())
-        phi = 2.0 * math.pi * torch.rand(1).item()
-        coords = torch.arange(n, dtype=torch.float32, device=x.device)
-        wave   = amp * torch.cos(2.0 * math.pi * k * coords / n + phi)
-        shape  = [1, 1, 1, 1, 1]
-        shape[freq_dim] = n
-        x = x + wave.reshape(shape)
-
-    return x.clamp(0.0, 1.0)
-
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Boucles train / val
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -273,11 +216,11 @@ def train_epoch(model, loader, optimizer, device, lam, scaler, writer, epoch,
 
         x = batch["image"].to(device)
         if augment:
-            x = _augment(x)
+            x = augment_geometric(x)
         
         optimizer.zero_grad()
         
-        with autocast():
+        with autocast('cuda'):
             preds = model(x)
             loss, losses = multi_task_loss(
                 preds, batch, lam, device, task1a_weights,
@@ -395,13 +338,18 @@ def main():
               f"art_w={t1a_art_w[a].item():.2f}")
 
     pin = device.type == "cuda"
+    n_workers = cfg["num_workers"]
     train_dl = DataLoader(
         train_ds, batch_size=cfg["batch_size"], shuffle=True,
-        num_workers=cfg["num_workers"], pin_memory=pin,
+        num_workers=n_workers, pin_memory=pin,
+        persistent_workers=(n_workers > 0),
+        prefetch_factor=3 if n_workers > 0 else None,
     )
     val_dl = DataLoader(
         val_ds, batch_size=cfg["batch_size"], shuffle=False,
-        num_workers=cfg["num_workers"], pin_memory=pin,
+        num_workers=n_workers, pin_memory=pin,
+        persistent_workers=(n_workers > 0),
+        prefetch_factor=3 if n_workers > 0 else None,
     )
 
     # ── modèle ────────────────────────────────────────────────────────────────
@@ -416,6 +364,10 @@ def main():
     ).to(device)
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Paramètres  : {n_params:,}")
+
+    if cfg.get("compile", False):
+        model = torch.compile(model, mode="reduce-overhead")
+        print("torch.compile  : activé (mode=reduce-overhead)")
 
     optimizer = optim.AdamW(
         [
@@ -440,7 +392,7 @@ def main():
         weight_decay=cfg["weight_decay"],
     )
     
-    scaler = GradScaler()
+    scaler = GradScaler('cuda')
     epochs   = 1 if cfg["debug"] else cfg["epochs"]
     t_max    = cfg["scheduler_tmax"] or epochs
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=t_max)
