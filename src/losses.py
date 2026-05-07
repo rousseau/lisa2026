@@ -131,19 +131,60 @@ def task1b_loss(
 # Task 2
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _soft_dice_loss(
-    prob:     torch.Tensor,   # [B, C, D, H, W]  après softmax
-    one_hot:  torch.Tensor,   # [B, C, D, H, W]  float
-    eps: float = 1e-5,
+def _generalized_dice_loss(
+    prob: torch.Tensor,      # [B, C, D, H, W] après softmax
+    one_hot: torch.Tensor,   # [B, C, D, H, W] float
+    eps: float = 1e-6,
 ) -> torch.Tensor:
-    """Dice loss souple (soft) moyenné sur toutes les classes et le batch."""
-    B, C = prob.shape[:2]
-    p = prob.view(B, C, -1)
-    t = one_hot.view(B, C, -1)
-    intersection = (p * t).sum(-1)
-    cardinality  = p.sum(-1) + t.sum(-1)
-    dice = (2.0 * intersection + eps) / (cardinality + eps)
-    return 1.0 - dice.mean()
+    """
+    Generalized Dice Loss (Sudre et al.) robuste au fort déséquilibre de classes.
+
+    Les poids de classes sont inversement proportionnels au volume GT au carré,
+    ce qui renforce les petites structures (ex: hippocampes).
+    """
+    p = prob.reshape(prob.shape[0], prob.shape[1], -1)
+    t = one_hot.reshape(one_hot.shape[0], one_hot.shape[1], -1)
+
+    # Somme sur batch + voxels pour obtenir les volumes par classe.
+    class_vol = t.sum(dim=(0, 2))
+    weights = torch.where(
+        class_vol > 0,
+        1.0 / (class_vol * class_vol + eps),
+        torch.zeros_like(class_vol),
+    )
+
+    inter = (p * t).sum(dim=(0, 2))
+    denom = p.sum(dim=(0, 2)) + t.sum(dim=(0, 2))
+
+    numerator = 2.0 * (weights * inter).sum()
+    denominator = (weights * denom).sum() + eps
+    dice = numerator / denominator
+    return 1.0 - dice
+
+
+def _weighted_cross_entropy_loss(
+    logits: torch.Tensor,    # [B, C, D, H, W]
+    target: torch.Tensor,    # [B, D, H, W]
+    n_classes: int,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    """
+    Cross-Entropy pondérée par classe (poids inverse fréquence sur le batch).
+    """
+    flat = target.reshape(-1)
+    hist = torch.bincount(flat, minlength=n_classes).float()
+
+    # Poids inverse fréquence, 0 pour classes absentes.
+    weights = torch.where(hist > 0, 1.0 / (hist + eps), torch.zeros_like(hist))
+
+    # Normalisation pour garder une échelle stable (moyenne des classes présentes = 1).
+    present = weights > 0
+    if present.any():
+        weights[present] = weights[present] / weights[present].mean()
+    else:
+        weights = torch.ones_like(weights)
+
+    return F.cross_entropy(logits, target, weight=weights.to(logits.device))
 
 
 def task2_loss(
@@ -153,7 +194,8 @@ def task2_loss(
     n_classes: int = N_SEG_CLASSES,
 ) -> torch.Tensor:
     """
-    Cross-entropy + Dice soft, calculé uniquement sur les images ciso annotées.
+    Weighted Cross-Entropy + Generalized Dice,
+    calculé uniquement sur les images ciso annotées.
     """
     if not mask.any():
         return logits.sum() * 0.0
@@ -161,14 +203,14 @@ def task2_loss(
     logits_m = logits[mask]   # [M, C, D, H, W]
     seg_m    = seg_gt[mask]   # [M, D, H, W]
 
-    ce   = F.cross_entropy(logits_m, seg_m)
+    ce = _weighted_cross_entropy_loss(logits_m, seg_m, n_classes=n_classes)
     prob = F.softmax(logits_m, dim=1)
     one_hot = (
         F.one_hot(seg_m, n_classes)
         .permute(0, 4, 1, 2, 3)
         .float()
     )
-    dc = _soft_dice_loss(prob, one_hot)
+    dc = _generalized_dice_loss(prob, one_hot)
     return ce + dc
 
 
@@ -251,3 +293,120 @@ def multi_task_loss(
 
     losses["total"] = total
     return total, losses
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Régularisation de factorisation (v8+)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def orthogonality_loss(
+    z_a: torch.Tensor,   # [B, c_a, D, H, W]
+    z_b: torch.Tensor,   # [B, c_b, D, H, W]
+) -> torch.Tensor:
+    """
+    Contrainte d'orthogonalité douce entre deux sous-espaces latents.
+
+    1. Global Average Pooling sur les dimensions spatiales → [B, c_X]
+    2. Calcule la norme de Frobenius du produit matriciel Z_a^T Z_b
+
+    L_orth = ||Z_a^T Z_b||_F / (B * c_a * c_b)
+
+    → Zéro si les projections moyennes sont orthogonales, pénalise
+      proportionnellement à leur redondance.
+    """
+    # GAP : [B, c_X, D, H, W] → [B, c_X]
+    a = z_a.flatten(2).mean(dim=-1)   # [B, c_a]
+    b = z_b.flatten(2).mean(dim=-1)   # [B, c_b]
+
+    # Normalisation L2 par échantillon pour comparer les directions
+    a = F.normalize(a, dim=-1)        # [B, c_a]
+    b = F.normalize(b, dim=-1)        # [B, c_b]
+
+    # Produit croisé : [B, c_a] × [B, c_b]^T  →  [B, B]  (corrélation inter-batch)
+    # On veut les corrélations dans l'espace des features, pas dans le batch :
+    # cov [c_a, c_b] = A^T @ B  /  B
+    cov = (a.T @ b) / a.shape[0]      # [c_a, c_b]
+    return (cov ** 2).sum().sqrt() / (z_a.shape[1] * z_b.shape[1])
+
+
+def vicreg_cov_loss(
+    z: torch.Tensor,          # [B, c, D, H, W]
+    gamma: float = 1.0,       # seuil de variance cible
+    eps: float = 1e-4,
+) -> torch.Tensor:
+    """
+    Pénalité de variance + covariance (VICReg, Bardes et al. 2022).
+
+    Appliquée sur une seule vue (pas besoin de 2 augmentations) :
+      - Variance  : max(0, γ − std(z_d)) pour chaque dimension d
+        → force chaque dimension à être informative (évite le collapse)
+      - Covariance: pénalise les éléments hors-diagonale de cov(z)/B
+        → force les dimensions à être décorrélées
+
+    z : [B, c, D, H, W] — GAP spatial → [B, c]
+    """
+    # GAP spatial
+    z_flat = z.flatten(2).mean(dim=-1)   # [B, c]
+    B, C   = z_flat.shape
+
+    # Cas limite : batch trop petit pour estimer correctement cov/std.
+    if B < 2:
+        return torch.tensor(0.0, device=z.device, dtype=z.dtype)
+
+    # Centrage
+    z_flat = z_flat - z_flat.mean(dim=0, keepdim=True)
+
+    # Variance : on pénalise les dimensions sous γ
+    # unbiased=False évite les NaN quand B est faible.
+    std = z_flat.std(dim=0, unbiased=False) + eps             # [C]
+    loss_v = F.relu(gamma - std).mean()
+
+    # Covariance : pénalise les éléments hors-diagonale
+    cov = (z_flat.T @ z_flat) / max(B - 1, 1)                # [C, C]
+    diag = torch.eye(C, device=z.device, dtype=z.dtype)
+    loss_c = (cov[~diag.bool()] ** 2).sum() / C
+
+    out = loss_v + loss_c
+    if not torch.isfinite(out):
+        return torch.tensor(0.0, device=z.device, dtype=z.dtype)
+    return out
+
+
+def factorization_loss(
+    preds:      dict,
+    lam_orth:   float = 0.05,
+    lam_vicreg: float = 0.5,
+) -> tuple[torch.Tensor, dict]:
+    """
+    Agrège les pertes de régularisation de factorisation :
+      - Orthogonalité entre z_anat et z_mod
+      - Orthogonalité entre z_anat et z_art
+      - VICReg (var + cov) sur chacun des 3 sous-espaces
+
+    Retourne (total_reg_loss, dict des composantes).
+    """
+    z_anat = preds.get("z_anat")
+    z_mod  = preds.get("z_mod")
+    z_art  = preds.get("z_art")
+
+    reg_losses = {}
+    total_reg  = torch.tensor(0.0, device=z_anat.device)
+
+    if lam_orth > 0:
+        lo1 = orthogonality_loss(z_anat, z_mod)
+        lo2 = orthogonality_loss(z_anat, z_art)
+        reg_losses["orth_anat_mod"] = lo1
+        reg_losses["orth_anat_art"] = lo2
+        total_reg = total_reg + lam_orth * (lo1 + lo2)
+
+    if lam_vicreg > 0:
+        lv1 = vicreg_cov_loss(z_anat)
+        lv2 = vicreg_cov_loss(z_mod)
+        lv3 = vicreg_cov_loss(z_art)
+        reg_losses["vicreg_anat"] = lv1
+        reg_losses["vicreg_mod"]  = lv2
+        reg_losses["vicreg_art"]  = lv3
+        total_reg = total_reg + lam_vicreg * (lv1 + lv2 + lv3)
+
+    reg_losses["total_reg"] = total_reg
+    return total_reg, reg_losses
