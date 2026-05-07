@@ -28,7 +28,7 @@
 
 #SBATCH --partition=gpu_p6
 #SBATCH --qos=qos_gpu_h100-t4
-#SBATCH --time=20:00:00
+#SBATCH --time=100:00:00
 
 #SBATCH --output=logs/lisa2026_%x_%j.out
 #SBATCH --error=logs/lisa2026_%x_%j.err

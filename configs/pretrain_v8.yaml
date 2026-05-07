@@ -1,0 +1,67 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Pré-entraînement VICReg auto-supervisé — LISA 2026  (Phase 4)
+#
+# Objectif : apprendre des sous-espaces stables AVANT la supervision.
+#   - 2 vues augmentées du même volume → invariance entre vues
+#   - Pénalité variance  : évite le collapse (toutes les sorties identiques)
+#   - Pénalité covariance: décore les dimensions de chaque sous-espace
+#   - Orthogonalité : z_anat ⊥ z_mod,  z_anat ⊥ z_art
+#
+# Résultat : outputs/checkpoints/pretrain_best.pt
+#   → contient {"backbone": ..., "factorizer": ...}
+#   → rechargé dans train.py via --pretrain-ckpt pretrain_best.pt
+#
+# Usage :
+#   python src/pretrain.py --config configs/pretrain_v8.yaml
+#   python src/pretrain.py --config configs/pretrain_v8.yaml --debug
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Données ───────────────────────────────────────────────────────────────────
+data:
+  root:        /home/rousseau/Data/LISA2026
+  target_size: 96
+  # split="all" utilisé en pretrain (pas besoin de val supervisée)
+
+# ── Architecture (doit correspondre à train_v8.yaml) ──────────────────────────
+model:
+  base_channels: 32
+  c_anat: 16
+  c_mod:   8
+  c_art:   8
+
+# ── Pré-entraînement ──────────────────────────────────────────────────────────
+training:
+  epochs:      50
+  batch_size:  4
+  num_workers: 8
+  save_every:  10
+
+  lr:           1.0e-4
+  weight_decay: 1.0e-5
+
+  # ── Poids VICReg (Bardes et al. 2022) ──────────────────────────────────────
+  # Bardes recommande lam_inv=25, lam_var=25, lam_cov=1 comme point de départ.
+  # lam_inv  : invariance entre 2 vues du même volume (MSE dans l'espace GAP)
+  #   → force z_anat(view1) ≈ z_anat(view2)  malgré les augmentations
+  lam_inv: 25.0
+
+  # lam_var  : pénalité variance — chaque dimension doit être active
+  #   → empêche le collapse (toutes les sorties deviennent la même valeur)
+  lam_var: 25.0
+
+  # lam_cov  : pénalité covariance hors-diagonale
+  #   → force les dimensions du sous-espace à être décorrélées
+  lam_cov:  1.0
+
+  # lam_orth : orthogonalité entre les 3 sous-espaces
+  #   → z_anat doit capturer des directions différentes de z_mod et z_art
+  lam_orth: 0.05
+
+  compile: false   # torch.compile désactivé (Triton / FFT complexe)
+
+  scheduler:
+    type:  cosine
+    T_max: null   # → epochs
+
+# ── Matériel ──────────────────────────────────────────────────────────────────
+device: auto

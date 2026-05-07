@@ -435,7 +435,8 @@ if __name__ == "__main__":
         c_anat=None, c_mod=None, c_art=None,
         epochs=None, batch_size=None, num_workers=None, save_every=None,
         lr=None, lam1a=None, lam1b=None, lam2=None,
-        device=args.device, resume=None, debug=False,
+        device=args.device, resume=None, pretrain_ckpt=None,
+        debug=False, no_viz=False,
     )
     cfg = load_config(fake_cli)
     if cfg["device"] == "auto":

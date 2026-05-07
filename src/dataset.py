@@ -89,13 +89,17 @@ def crop_or_pad(data: np.ndarray, target_size: tuple) -> np.ndarray:
 
 def normalize(data: np.ndarray) -> np.ndarray:
     """Clip au 99e percentile des voxels non nuls, puis scale → [0, 1]."""
+    # Robustesse: certains volumes peuvent contenir NaN/Inf après resampling.
+    data = np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
+
     nonzero = data[data > 0]
     if len(nonzero) == 0:
         return data
     p99 = np.percentile(nonzero, 99)
     if p99 <= 0:
         return data
-    return np.clip(data, 0, p99) / p99
+    out = np.clip(data, 0, p99) / p99
+    return np.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
 
 
 import torch as _torch  # noqa: E402 — import local pour éviter une dépendance circulaire
@@ -368,6 +372,7 @@ class LISAJointDataset(Dataset):
         # crop/pad vers la taille cible (après simulation)
         data = image.squeeze(0).numpy()
         data = crop_or_pad(data, self.target_size)
+        data = np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
         image = torch.from_numpy(data[None])  # [1, D, H, W]
 
         # segmentation (images ciso uniquement)

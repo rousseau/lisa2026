@@ -231,44 +231,38 @@ class Task1aHead(nn.Module):
     """
     Task 1a – Quality Control (classification multi-artefact, 3 sévérités).
 
-    Architecture améliorée :
-    1. Branche Spatiale : Pooling multi-échelle (GAP + GMP + std) sur bottleneck + décodeur.
-    2. Branche Fréquentielle : FFT 3D sur l'image d'entrée pour capturer Zipper/Banding.
-    3. Sortie Ordinale : Prédit 2 seuils binaires par artefact (Sévérité >= 1, Sévérité >= 2).
+    Branche Spatiale  : Pooling multi-échelle (GAP + GMP + std) sur :
+      - bottleneck (profond, sémantique)
+      - dec_feats  (intermédiaires du décodeur)
+      - extra_feats = concat(z_anat, z_art)  [optionnel, v8+]
+    Branche Fréquentielle : FFT 3D sur l'image d'entrée (Zipper/Banding).
+    Sortie Ordinale : 2 seuils binaires par artefact.
 
-    Niveaux et dimensions (base=16) :
-      bottleneck [B, 256, 6³]  → 3×256 =  768
-      dec f4     [B, 128,12³]  → 3×128 =  384
-      dec f3     [B,  64,24³]  → 3× 64 =  192
-      dec f2     [B,  32,48³]  → 3× 32 =   96
-      dec f1     [B,  16,96³]  → 3× 16 =   48
-                                  Total = 1488
-      FFT branch : [B, 128] (spectre de puissance moyen)
-                                  Total final = 1616
-
-    MLP : Linear(1616→256) + LN + ReLU + Dropout(0.3)
-          Linear(256→128)  + ReLU + Dropout(0.2)
-          Linear(128, n_artifacts * (n_severity - 1))
+    extra_feat_ch (v8) : canaux de concat(z_anat, z_art) = c_anat + c_art.
+    Si extra_feat_ch=0 (v7 compat), extra_feats est ignoré.
     """
 
     def __init__(
         self,
-        bottleneck_ch: int,
-        dec_feat_chs:  list[int],
-        n_artifacts:   int = 7,
-        n_severity:    int = 3,
+        bottleneck_ch:  int,
+        dec_feat_chs:   list[int],
+        n_artifacts:    int = 7,
+        n_severity:     int = 3,
+        extra_feat_ch:  int = 0,   # c_anat + c_art en v8, 0 en v7
     ):
         super().__init__()
-        self.n_artifacts = n_artifacts
-        self.n_severity  = n_severity
-        
-        # Features spatiales
-        spatial_feats = 3 * (bottleneck_ch + sum(dec_feat_chs))
-        # Features fréquentielles (on prend un vecteur résumé du spectre)
-        freq_feats = 128 
-        
+        self.n_artifacts   = n_artifacts
+        self.n_severity    = n_severity
+        self.extra_feat_ch = extra_feat_ch
+
+        # Features spatiales depuis bottleneck + décodeur + (optionnel) extra
+        spatial_feats  = 3 * (bottleneck_ch + sum(dec_feat_chs))
+        if extra_feat_ch > 0:
+            spatial_feats += 3 * extra_feat_ch
+        freq_feats = 128
+
         in_feats = spatial_feats + freq_feats
-        
+
         self.mlp = nn.Sequential(
             nn.Linear(in_feats, 256),
             nn.LayerNorm(256),
@@ -277,59 +271,43 @@ class Task1aHead(nn.Module):
             nn.Linear(256, 128),
             nn.ReLU(inplace=True),
             nn.Dropout(0.2),
-            # Sortie ordinale : (n_severity - 1) seuils par artefact
             nn.Linear(128, n_artifacts * (n_severity - 1)),
         )
 
     @staticmethod
     def _pool(feat: torch.Tensor) -> torch.Tensor:
         """GAP + GMP + std sur les dimensions spatiales → [B, 3·C]."""
-        v   = feat.flatten(2)                       # [B, C, N_voxels]
-        gap = v.mean(dim=-1)                        # [B, C]
-        gmp = v.max(dim=-1).values                  # [B, C]
-        std = v.std(dim=-1, unbiased=False)         # [B, C]
-        return torch.cat([gap, gmp, std], dim=1)    # [B, 3·C]
+        v   = feat.flatten(2)
+        gap = v.mean(dim=-1)
+        gmp = v.max(dim=-1).values
+        std = v.std(dim=-1, unbiased=False)
+        return torch.cat([gap, gmp, std], dim=1)
 
     def _get_freq_feats(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Extrait des features fréquentielles via FFT 3D.
-        x : [B, 1, D, H, W]
-        """
-        # FFT 3D
-        fft = torch.fft.fftn(x, dim=(-3, -2, -1))
-        # Spectre de puissance avec compression log pour éviter les NaNs
-        mag = torch.log1p(torch.abs(fft))
-        
-        # On réduit le spectre en un vecteur de 128
+        fft      = torch.fft.fftn(x, dim=(-3, -2, -1))
+        mag      = torch.log1p(torch.abs(fft))
         flat_mag = mag.flatten(1)
-        indices = torch.linspace(0, flat_mag.shape[1]-1, 128).long().to(x.device)
-        feats = flat_mag[:, indices]
-        
-        # Normalisation Z-score pour stabiliser l'entrée du MLP
-        feats = (feats - feats.mean(dim=1, keepdim=True)) / (feats.std(dim=1, keepdim=True) + 1e-6)
+        indices  = torch.linspace(0, flat_mag.shape[1] - 1, 128).long().to(x.device)
+        feats    = flat_mag[:, indices]
+        feats    = (feats - feats.mean(dim=1, keepdim=True)) / (feats.std(dim=1, keepdim=True) + 1e-6)
         return feats
 
     def forward(
         self,
-        x:           torch.Tensor,
-        bottleneck:  torch.Tensor,
-        dec_feats:   list[torch.Tensor],
+        x:            torch.Tensor,
+        bottleneck:   torch.Tensor,
+        dec_feats:    list[torch.Tensor],
+        extra_feats:  torch.Tensor | None = None,
     ) -> torch.Tensor:
-        # 1. Features spatiales (Pooling multi-échelle)
         pools = [self._pool(bottleneck)]
         for f in dec_feats:
             pools.append(self._pool(f))
-        x_spatial = torch.cat(pools, dim=1)                 # [B, 1488]
-        
-        # 2. Features fréquentielles
-        x_freq = self._get_freq_feats(x)                     # [B, 128]
-        
-        # 3. Fusion et MLP
-        combined = torch.cat([x_spatial, x_freq], dim=1)     # [B, 1616]
-        logits = self.mlp(combined)
-        
-        # Sortie : [B, n_artifacts, n_severity - 1]
-        return logits.view(-1, self.n_artifacts, self.n_severity - 1)
+        if extra_feats is not None and self.extra_feat_ch > 0:
+            pools.append(self._pool(extra_feats))
+        x_spatial = torch.cat(pools, dim=1)
+        x_freq    = self._get_freq_feats(x)
+        combined  = torch.cat([x_spatial, x_freq], dim=1)
+        return self.mlp(combined).view(-1, self.n_artifacts, self.n_severity - 1)
 
 
 class Task1bHead(nn.Module):
@@ -382,16 +360,66 @@ class Task2Head(nn.Module):
 # Modèle principal
 # ──────────────────────────────────────────────────────────────────────────────
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Décodeur factorisé (anatomie / modalité / artefact)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class FactorizedProjection(nn.Module):
+    """
+    Projette les features pleine-résolution [B, feat_ch, D, H, W] en trois
+    sous-espaces via trois convolutions 1×1 indépendantes :
+
+        z_anat [B, c_anat, D, H, W]  — facteurs structurels / anatomiques
+        z_mod  [B, c_mod,  D, H, W]  — facteurs d'apparence / modalité
+        z_art  [B, c_art,  D, H, W]  — facteurs d'artefacts
+
+    Routing vers les têtes :
+        Task1a  ← concat(z_anat, z_art)  + bottleneck
+        Task1b  ← concat(z_anat, z_mod)
+        Task2   ← z_anat  (facteurs structurels uniquement)
+    """
+
+    def __init__(self, feat_ch: int, c_anat: int, c_mod: int, c_art: int):
+        super().__init__()
+        self.proj_anat = nn.Sequential(
+            nn.Conv3d(feat_ch, c_anat, 1, bias=False),
+            nn.GroupNorm(min(8, c_anat), c_anat),
+            nn.ReLU(inplace=True),
+        )
+        self.proj_mod = nn.Sequential(
+            nn.Conv3d(feat_ch, c_mod, 1, bias=False),
+            nn.GroupNorm(min(8, c_mod), c_mod),
+            nn.ReLU(inplace=True),
+        )
+        self.proj_art = nn.Sequential(
+            nn.Conv3d(feat_ch, c_art, 1, bias=False),
+            nn.GroupNorm(min(8, c_art), c_art),
+            nn.ReLU(inplace=True),
+        )
+
+    def forward(
+        self, feats: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        return self.proj_anat(feats), self.proj_mod(feats), self.proj_art(feats)
+
+
 class BackboneLISA(nn.Module):
     """
-    Modèle joint LISA 2026 — backbone UNet complet + têtes dédiées par tâche.
+    Modèle joint LISA 2026 — backbone UNet + factorisation des features + têtes.
 
     Paramètres :
         base          : largeur de base de l'UNet (défaut 16)
+        c_anat        : canaux sous-espace anatomique (défaut 16)
+        c_mod         : canaux sous-espace modalité/apparence (défaut 8)
+        c_art         : canaux sous-espace artefacts (défaut 8)
         n_artifacts   : nombre d'artefacts Task1a (7)
-        n_severity    : niveaux de sévérité Task1a (3 : aucun/léger/sévère)
-        n_seg_classes : classes de segmentation Task2 (14 : fond + 13 structures)
-        c_anat/mod/art: ignorés (conservés pour compatibilité YAML)
+        n_severity    : niveaux de sévérité Task1a (3)
+        n_seg_classes : classes de segmentation Task2 (14)
+
+    Routing des sous-espaces :
+        Task1a  ← concat(z_anat, z_art)  + bottleneck  (structure + artefacts)
+        Task1b  ← concat(z_anat, z_mod)                (structure + apparence)
+        Task2   ← z_anat                               (structure seule)
     """
 
     def __init__(
@@ -400,23 +428,26 @@ class BackboneLISA(nn.Module):
         n_artifacts:   int = 7,
         n_severity:    int = 3,
         n_seg_classes: int = 14,
-        # anciens paramètres disentanglement — ignorés, conservés pour la
-        # compatibilité avec les fichiers YAML et les checkpoints existants
         c_anat:        int = 16,
         c_mod:         int = 8,
         c_art:         int = 8,
     ):
         super().__init__()
-        self.backbone = SharedUNet(base=base)
+        self.backbone   = SharedUNet(base=base)
+        self.factorizer = FactorizedProjection(
+            feat_ch=self.backbone.feat_ch,
+            c_anat=c_anat, c_mod=c_mod, c_art=c_art,
+        )
 
         self.task1a = Task1aHead(
             bottleneck_ch = self.backbone.bottleneck_ch,
             dec_feat_chs  = self.backbone.dec_feat_chs,
             n_artifacts   = n_artifacts,
             n_severity    = n_severity,
+            extra_feat_ch = c_anat + c_art,   # remplace feat_ch dans le pooling spatial
         )
-        self.task1b = Task1bHead(feat_ch=self.backbone.feat_ch)
-        self.task2  = Task2Head(feat_ch=self.backbone.feat_ch, n_classes=n_seg_classes)
+        self.task1b = Task1bHead(feat_ch=c_anat + c_mod)
+        self.task2  = Task2Head(feat_ch=c_anat, n_classes=n_seg_classes)
 
     def forward(
         self,
@@ -427,15 +458,22 @@ class BackboneLISA(nn.Module):
     ) -> dict[str, torch.Tensor]:
         """
         Retourne un dict avec les clés 'task1a', 'task1b', 'task2'
-        selon les flags run_taskXX.
+        et optionnellement 'z_anat', 'z_mod', 'z_art' pour les losses de régularisation.
         """
         feats, bottleneck, dec_feats = self.backbone(x)
+        z_anat, z_mod, z_art        = self.factorizer(feats)
 
-        out = {}
+        out = {
+            "z_anat": z_anat,
+            "z_mod":  z_mod,
+            "z_art":  z_art,
+        }
         if run_task1a:
-            out["task1a"] = self.task1a(x, bottleneck, dec_feats)
+            feat_qa = torch.cat([z_anat, z_art], dim=1)
+            out["task1a"] = self.task1a(x, bottleneck, dec_feats, extra_feats=feat_qa)
         if run_task1b:
-            out["task1b"] = self.task1b(feats)
+            feat_enh = torch.cat([z_anat, z_mod], dim=1)
+            out["task1b"] = self.task1b(feat_enh)
         if run_task2:
-            out["task2"]  = self.task2(feats)
+            out["task2"] = self.task2(z_anat)
         return out

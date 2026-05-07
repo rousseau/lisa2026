@@ -52,6 +52,11 @@ training:
   augment: true
   # augment_artifact : simulation UPF/Sundaresan 2024 (item-level, __getitem__)
   simulate_artifacts: true
+  # Modes d'augmentation:
+  #   - torchio_full   : pipeline complète TorchIO (artefacts + batch aug)
+  #   - tsinghua_simple: sans TorchIO, flips + random affine uniquement
+  #   - none           : aucune augmentation
+  augmentation_mode: none
 
   lr_encoder_scale: 1.0
   early_stopping_patience: 30

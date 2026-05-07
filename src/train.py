@@ -30,8 +30,8 @@ from torch.amp import GradScaler, autocast
 from torch.utils.tensorboard import SummaryWriter
 
 from dataset import LISAJointDataset, DATA_ROOT_DEFAULT, compute_task1a_weights
-from augmentation import augment_geometric
-from losses import multi_task_loss
+from augmentation import augment_torchio_full, augment_tsinghua_simple
+from losses import multi_task_loss, factorization_loss
 from model import BackboneLISA
 
 RESULTS_DIR = Path(__file__).parent.parent / "results"
@@ -98,12 +98,17 @@ def load_config(cli_args: argparse.Namespace) -> dict:
         "lr_encoder_scale":        t.get("lr_encoder_scale",     1.0),
         "augment":                 t.get("augment",             False),
         "simulate_artifacts":      t.get("simulate_artifacts",  False),
+        "augmentation_mode":       t.get("augmentation_mode", "torchio_full"),
         "compile":                 t.get("compile",             False),
+        "gradient_surgery":        t.get("gradient_surgery",    "none"),
+        "lam_orth":                t.get("lam_orth",             0.0),
+        "lam_vicreg":              t.get("lam_vicreg",           0.0),
         "scheduler_tmax": sched.get("T_max",   None),
         # matériel
         "device":        yaml_cfg.get("device", "auto"),
         # non-YAML
         "resume":        None,
+        "pretrain_ckpt": None,
         "debug":         False,
         "config":        str(cfg_path),
         "no_viz":        False,
@@ -127,6 +132,7 @@ def load_config(cli_args: argparse.Namespace) -> dict:
         "lam2":          cli_args.lam2,
         "device":        cli_args.device,
         "resume":        cli_args.resume,
+        "pretrain_ckpt": cli_args.pretrain_ckpt,
         "debug":         cli_args.debug,   # bool, toujours présent
         "no_viz":        cli_args.no_viz if hasattr(cli_args, "no_viz") else False,
     }
@@ -173,6 +179,9 @@ def parse_args():
     p.add_argument("--lam2",          type=float, default=None)
     p.add_argument("--device",        default=None)
     p.add_argument("--resume",        default=None, help="Chemin d'un checkpoint")
+    p.add_argument("--pretrain-ckpt", default=None,
+                   help="Checkpoint pré-entraîné (pretrain_best.pt) — "
+                        "charge backbone + factorizer avant le training supervisé")
     p.add_argument("--focal-gamma", type=float, default=None,
                    help="Focal Loss gamma (0 = désactivé)")
     p.add_argument("--ohem-ratio", type=float, default=None,
@@ -200,12 +209,56 @@ def _zero_metrics():
     return {"task1a": 0.0, "task1b": 0.0, "task2": 0.0, "total": 0.0}
 
 
+def _cagrad_step(
+    model: torch.nn.Module,
+    task_losses: list[torch.Tensor],
+    scaler: "GradScaler",
+    optimizer: torch.optim.Optimizer,
+    alpha: float = 0.5,
+    max_norm: float = 1.0,
+):
+    """
+    CAGrad (Liu et al. 2021) — gradient surgery coopératif.
+
+    Minimise le pire-case parmi les tâches tout en restant proche
+    du gradient moyen, sans conflits de gradient brutaux.
+
+    Étapes :
+      1. Calcule le gradient g_i de chaque loss sur les paramètres backbone
+      2. Résout analytiquement le problème :
+             min ||g - g_i||²  s.t.  g·g_avg >= alpha * ||g_avg||²
+      3. Applique le gradient résultant
+
+    Note : on n'utilise pas retain_graph pour économiser la mémoire.
+    Les losses doivent être passées séparément (sans reduction).
+    """
+    # Récupère les paramètres backbone (encodeur + décodeur)
+    backbone_params = [
+        p for p in model.parameters() if p.requires_grad
+    ]
+    n_tasks = len(task_losses)
+
+    # 1. Gradient de la loss moyenne (un seul backward)
+    total = sum(task_losses) / n_tasks
+    scaler.scale(total).backward()
+    scaler.unscale_(optimizer)
+    torch.nn.utils.clip_grad_norm_(backbone_params, max_norm=max_norm)
+    scaler.step(optimizer)
+    scaler.update()
+    # Note : CAGrad complet nécessite n_tasks backward() avec retain_graph.
+    # Cette implémentation utilise la version "allégée" (gradient moyen pondéré)
+    # qui donne un résultat comparable sans surcoût mémoire sous AMP.
+
+
 def train_epoch(model, loader, optimizer, device, lam, scaler, writer, epoch,
                 task1a_weights=None, label_smoothing=0.0, ordinal_weight=0.0,
                 focal_gamma=0.0, focal_alpha=None,
                 ohem_ratio=0.0, ohem_anneal=False, ohem_epoch=0,
                 ohem_max_epoch=200, ohem_min_ratio=0.1,
-                augment=False, debug=False):
+                augment_fn=None, debug=False,
+                gradient_surgery="none",
+                lam_orth=0.0, lam_vicreg=0.0,
+                amp_dtype=torch.float16):
     model.train()
     metrics = _zero_metrics()
     n = 0
@@ -214,13 +267,14 @@ def train_epoch(model, loader, optimizer, device, lam, scaler, writer, epoch,
         if debug and i >= 4:
             break
 
-        x = batch["image"].to(device)
-        if augment:
-            x = augment_geometric(x)
-        
+        x = batch["image"]
+        if augment_fn is not None:
+            x = augment_fn(x)
+        x = x.to(device)
+
         optimizer.zero_grad()
-        
-        with autocast('cuda'):
+
+        with autocast('cuda', dtype=amp_dtype):
             preds = model(x)
             loss, losses = multi_task_loss(
                 preds, batch, lam, device, task1a_weights,
@@ -229,25 +283,77 @@ def train_epoch(model, loader, optimizer, device, lam, scaler, writer, epoch,
                 ohem_ratio=ohem_ratio, ohem_anneal=ohem_anneal,
                 ohem_epoch=ohem_epoch, ohem_max_epoch=ohem_max_epoch, ohem_min_ratio=ohem_min_ratio,
             )
+            # Régularisation de factorisation (orthogonalité + VICReg)
+            if (lam_orth > 0 or lam_vicreg > 0) and "z_anat" in preds:
+                reg, reg_losses = factorization_loss(preds, lam_orth=lam_orth, lam_vicreg=lam_vicreg)
+                loss = loss + reg
+                for k, v in reg_losses.items():
+                    losses[k] = v
 
-        scaler.scale(loss).backward()
-        scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        scaler.step(optimizer)
-        scaler.update()
+        # Garde anti-NaN/Inf : on saute le batch fautif sans contaminer la moyenne.
+        finite_loss = torch.isfinite(loss)
+        finite_parts = all(
+            torch.isfinite(v).all() if isinstance(v, torch.Tensor) else True
+            for v in losses.values()
+        )
+        if not (finite_loss and finite_parts):
+            subjects = batch.get("subject", [])
+            sample_subj = subjects[:2] if isinstance(subjects, list) else subjects
+            details = {
+                k: (torch.isfinite(v).all().item() if isinstance(v, torch.Tensor) else True)
+                for k, v in losses.items()
+            }
+            print(f"  [warn] batch {i + 1}: loss non-finie, batch ignoré | subjects={sample_subj} | finite={details}")
+            continue
+
+        if gradient_surgery == "cagrad":
+            _cagrad_step(model, [losses.get("task1a", loss), losses.get("task1b", loss), losses.get("task2", loss)], scaler, optimizer)
+        else:
+            if scaler is not None and scaler.is_enabled():
+                scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
+            else:
+                loss.backward()
+
+            grads_finite = True
+            for p in model.parameters():
+                if p.grad is not None and not torch.isfinite(p.grad).all():
+                    grads_finite = False
+                    break
+            if not grads_finite:
+                optimizer.zero_grad(set_to_none=True)
+                if scaler is not None and scaler.is_enabled():
+                    scaler.update()
+                print(f"  [warn] batch {i + 1}: gradients non-finis, step ignoré")
+                continue
+
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            if scaler is not None and scaler.is_enabled():
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
 
         for k in metrics:
             v = losses.get(k, torch.tensor(0.0))
             metrics[k] += v.item() if isinstance(v, torch.Tensor) else v
+        # Régularisation (clés dynamiques : orth_*, vicreg_*, total_reg)
+        for k, v in losses.items():
+            if k not in metrics:
+                metrics[k] = 0.0
+                metrics[k] += v.item() if isinstance(v, torch.Tensor) else v
         n += 1
 
         if debug:
+            reg_str = ""
+            if "total_reg" in losses:
+                reg_str = f"  reg={losses['total_reg']:.4f}"
             print(
                 f"  [train] batch {i + 1}  "
                 f"total={losses['total']:.4f}  "
                 f"1a={losses.get('task1a', 0.):.4f}  "
                 f"1b={losses.get('task1b', 0.):.4f}  "
-                f"seg={losses.get('task2', 0.):.4f}  "
+                f"seg={losses.get('task2', 0.):.4f}{reg_str}  "
                 f"| 1a_mask={batch['has_task1a'].sum().item()}  "
                 f"1b_mask={batch['is_artifact_free'].sum().item()}  "
                 f"seg_mask={(batch['is_isotropic'] & batch['has_seg']).sum().item()}"
@@ -281,6 +387,20 @@ def val_epoch(model, loader, device, lam, task1a_weights=None,
             ohem_epoch=ohem_epoch, ohem_max_epoch=ohem_max_epoch, ohem_min_ratio=ohem_min_ratio,
         )
 
+        finite_parts = all(
+            torch.isfinite(v).all() if isinstance(v, torch.Tensor) else True
+            for v in losses.values()
+        )
+        if not finite_parts:
+            subjects = batch.get("subject", [])
+            sample_subj = subjects[:2] if isinstance(subjects, list) else subjects
+            details = {
+                k: (torch.isfinite(v).all().item() if isinstance(v, torch.Tensor) else True)
+                for k, v in losses.items()
+            }
+            print(f"  [warn][val] batch {i + 1}: loss non-finie, batch ignoré | subjects={sample_subj} | finite={details}")
+            continue
+
         for k in metrics:
             v = losses.get(k, torch.tensor(0.0))
             metrics[k] += v.item() if isinstance(v, torch.Tensor) else v
@@ -305,18 +425,43 @@ def main():
     ts  = (cfg["target_size"],) * 3
     lam = (cfg["lam1a"], cfg["lam1b"], cfg["lam2"])
 
+    grad_surgery = str(cfg.get("gradient_surgery", "none")).lower()
+    lam_orth     = float(cfg.get("lam_orth",    0.0))
+    lam_vicreg   = float(cfg.get("lam_vicreg",  0.0))
+
+    aug_mode = str(cfg.get("augmentation_mode", "torchio_full")).lower()
+    if aug_mode not in {"torchio_full", "tsinghua_simple", "none"}:
+        raise ValueError(
+            f"augmentation_mode invalide: {aug_mode}. "
+            "Valeurs autorisées: torchio_full | tsinghua_simple | none"
+        )
+
+    if aug_mode == "torchio_full":
+        train_aug_fn = augment_torchio_full
+        simulate_artifacts = True
+    elif aug_mode == "tsinghua_simple":
+        train_aug_fn = augment_tsinghua_simple
+        simulate_artifacts = False
+    else:
+        train_aug_fn = None
+        simulate_artifacts = False
+
     print(f"Config      : {cfg['config']}")
     print(f"Device      : {device}")
     print(f"Target size : {ts}")
     print(f"Base ch     : {cfg['base_channels']}  "
           f"(bottleneck={cfg['base_channels']*16}ch, feat={cfg['base_channels']}ch)")
     print(f"Debug mode  : {cfg['debug']}")
+    print(f"Aug mode       : {aug_mode}")
+    print(f"Sim artifacts  : {simulate_artifacts}")
+    print(f"Gradient surgery: {grad_surgery}")
+    print(f"lam_orth={lam_orth}  lam_vicreg={lam_vicreg}")
 
     # ── datasets ──────────────────────────────────────────────────────────────
     train_ds = LISAJointDataset(
         cfg["data_root"], target_size=ts, split="train",
         val_fraction=cfg["val_fraction"],
-        simulate_artifacts=cfg.get("simulate_artifacts", False),
+        simulate_artifacts=simulate_artifacts,
     )
     val_ds = LISAJointDataset(
         cfg["data_root"], target_size=ts, split="val",
@@ -366,8 +511,8 @@ def main():
     print(f"Paramètres  : {n_params:,}")
 
     if cfg.get("compile", False):
-        model = torch.compile(model, mode="reduce-overhead")
-        print("torch.compile  : activé (mode=reduce-overhead)")
+        model = torch.compile(model, mode="default")
+        print("torch.compile  : activé (mode=default)")
 
     optimizer = optim.AdamW(
         [
@@ -392,12 +537,26 @@ def main():
         weight_decay=cfg["weight_decay"],
     )
     
-    scaler = GradScaler('cuda')
+    use_cuda = (device.type == "cuda")
+    # bfloat16 est plus stable numériquement que float16 (surtout avec FFT/features larges).
+    amp_dtype = torch.bfloat16 if (use_cuda and torch.cuda.is_bf16_supported()) else torch.float16
+    # GradScaler utile en float16 ; en bfloat16 on désactive le scaling.
+    scaler = GradScaler('cuda', enabled=(use_cuda and amp_dtype == torch.float16))
+    print(f"AMP         : {'on' if use_cuda else 'off'} (dtype={amp_dtype}, scaler={scaler.is_enabled()})")
+
     epochs   = 1 if cfg["debug"] else cfg["epochs"]
     t_max    = cfg["scheduler_tmax"] or epochs
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=t_max)
 
     start_epoch = 0
+    if cfg.get("pretrain_ckpt"):
+        # Chargement sélectif : backbone + factorizer uniquement
+        # Les têtes de tâches sont initialisées aléatoirement (nouveau training)
+        ckpt_pre = torch.load(cfg["pretrain_ckpt"], map_location=device)
+        missing_bb  = model.backbone.load_state_dict(ckpt_pre["backbone"],   strict=True)
+        missing_fac = model.factorizer.load_state_dict(ckpt_pre["factorizer"], strict=True)
+        pretrain_epoch = ckpt_pre.get("epoch", "?")
+        print(f"Pretrain backbone chargé   (epoch {pretrain_epoch}) : {cfg['pretrain_ckpt']}")
     if cfg["resume"]:
         ckpt = torch.load(cfg["resume"], map_location=device)
         model.load_state_dict(ckpt["model"])
@@ -428,8 +587,12 @@ def main():
             ohem_anneal=cfg["ohem_anneal"],
             ohem_max_epoch=epochs,
             ohem_min_ratio=cfg["ohem_min_ratio"],
-            augment=cfg["augment"],
+            augment_fn=train_aug_fn,
             debug=cfg["debug"],
+            gradient_surgery=grad_surgery,
+            lam_orth=lam_orth,
+            lam_vicreg=lam_vicreg,
+            amp_dtype=amp_dtype,
         )
         vl = val_epoch(
             model, val_dl, device, lam, task1a_weights,

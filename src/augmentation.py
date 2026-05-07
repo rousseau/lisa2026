@@ -30,6 +30,7 @@ import random
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 import torchio as tio
 
 ARTIFACT_NAMES = [
@@ -85,6 +86,20 @@ def _from_zscore(z: torch.Tensor, ref: torch.Tensor) -> torch.Tensor:
 # RandomBlur(0.4) — appliqué après chaque artefact (UPF : sur masque cerveau
 # uniquement, approximé ici sur tout le volume).
 _blur = tio.RandomBlur(0.4)
+
+# Batch-level augmentation TorchIO "complète" (géométrie + intensité).
+_TORCHIO_FULL_BATCH = tio.Compose([
+    tio.RandomFlip(axes=(0, 1, 2), flip_probability=0.5, p=0.5),
+    tio.RandomAffine(
+        scales=(0.90, 1.10),
+        degrees=10,
+        translation=6,
+        image_interpolation="linear",
+        p=0.8,
+    ),
+    tio.RandomNoise(mean=0.0, std=(0.0, 0.02), p=0.4),
+    tio.RandomGamma(log_gamma=(-0.20, 0.20), p=0.3),
+])
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -474,3 +489,68 @@ def augment_geometric(x: torch.Tensor) -> torch.Tensor:
     x     = x + sigma * torch.randn_like(x)
     scale = 0.9 + torch.rand(1).item() * 0.2
     return (x * scale).clamp(0.0, 1.0)
+
+
+def augment_torchio_full(x: torch.Tensor) -> torch.Tensor:
+    """
+    Augmentation "complète" via TorchIO (batch [B,1,D,H,W]).
+
+    - flips + affine + bruit + gamma
+    - complémentaire à augment_artifact (item-level) dans dataset.py
+    """
+    if x.ndim != 5:
+        return x
+
+    out = []
+    for i in range(x.shape[0]):
+        subj = _to_subj(x[i])
+        aug  = _TORCHIO_FULL_BATCH(subj)
+        out.append(_from_subj(aug).clamp(0.0, 1.0))
+    return torch.stack(out, dim=0)
+
+
+def augment_tsinghua_simple(x: torch.Tensor) -> torch.Tensor:
+    """
+    Augmentation simple "style Tsinghua" (sans TorchIO, sans intensité).
+
+    Choix explicite pour préserver les distributions d'intensité IRM :
+      - flip gauche-droite (p=0.5)
+      - random affine 3D léger (rotation/scale/translation)
+    """
+    if x.ndim != 5:
+        return x
+
+    if torch.rand(1).item() < 0.5:
+        x = x.flip(4)
+
+    b = x.shape[0]
+    dev = x.device
+    dtype = x.dtype
+
+    angles = (torch.rand(b, 3, device=dev, dtype=dtype) * 2.0 - 1.0) * (8.0 * np.pi / 180.0)
+    scales = 0.95 + 0.10 * torch.rand(b, device=dev, dtype=dtype)
+    trans  = (torch.rand(b, 3, device=dev, dtype=dtype) * 2.0 - 1.0) * 0.04
+
+    theta = torch.zeros((b, 3, 4), device=dev, dtype=dtype)
+    for i in range(b):
+        ax, ay, az = angles[i]
+        sx, cx = torch.sin(ax), torch.cos(ax)
+        sy, cy = torch.sin(ay), torch.cos(ay)
+        sz, cz = torch.sin(az), torch.cos(az)
+
+        rx = torch.tensor([[1, 0, 0], [0, cx, -sx], [0, sx, cx]], device=dev, dtype=dtype)
+        ry = torch.tensor([[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]], device=dev, dtype=dtype)
+        rz = torch.tensor([[cz, -sz, 0], [sz, cz, 0], [0, 0, 1]], device=dev, dtype=dtype)
+
+        r = (rz @ ry @ rx) * scales[i]
+        theta[i, :, :3] = r
+        theta[i, :, 3] = trans[i]
+
+    grid = F.affine_grid(theta, size=x.size(), align_corners=False)
+    return F.grid_sample(
+        x,
+        grid,
+        mode="bilinear",
+        padding_mode="border",
+        align_corners=False,
+    ).clamp(0.0, 1.0)
