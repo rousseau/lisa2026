@@ -5,6 +5,7 @@
 # Usage:
 #   sbatch src/slurm/lisa_jeanzay.slurm --run RUN_0001
 #   sbatch src/slurm/lisa_jeanzay.slurm --run RUN_0002 --smoke-test
+#   sbatch src/slurm/lisa_jeanzay.slurm --run RUN_0003
 #
 # Le script lance le wrapper correspondant dans scripts/run_<RUN>.sh.
 # Si --run n'est pas fourni, RUN_0002 est utilisé par défaut.
@@ -74,12 +75,12 @@ if [[ "$RUN_NAME" =~ ^[0-9]+$ ]]; then
 fi
 
 case "$RUN_NAME" in
-    RUN_0001|RUN_0002)
+    RUN_0001|RUN_0002|RUN_0003)
         RUN_SCRIPT="scripts/run_${RUN_NAME#RUN_}.sh"
         ;;
     *)
         echo "[ERREUR] Run inconnu: $RUN_NAME"
-        echo "         Runs disponibles: RUN_0001, RUN_0002"
+        echo "         Runs disponibles: RUN_0001, RUN_0002, RUN_0003"
         exit 1
         ;;
 esac
