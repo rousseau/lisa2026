@@ -34,3 +34,17 @@ lisa2026/
 conda activate lisa   # à créer
 pip install nibabel pandas numpy matplotlib scikit-learn
 ```
+
+## Lancement sur Jean Zay
+
+Le point d'entrée générique est [src/slurm/lisa_jeanzay.slurm](src/slurm/lisa_jeanzay.slurm).
+
+Exemples :
+
+```bash
+sbatch src/slurm/lisa_jeanzay.slurm --run RUN_0001
+sbatch src/slurm/lisa_jeanzay.slurm --run RUN_0002
+sbatch src/slurm/lisa_jeanzay.slurm --run RUN_0002 --smoke-test
+```
+
+Les wrappers correspondants sont [scripts/run_0001.sh](scripts/run_0001.sh) et [scripts/run_0002.sh](scripts/run_0002.sh). Le run 0002 reprend l'approche multi-label ordinal avec EMD + Focal.
