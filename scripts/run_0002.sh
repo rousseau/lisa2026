@@ -24,26 +24,38 @@ echo "=========================================="
 echo ""
 echo "[1/5] Loading Python environment..."
 
-if command -v conda >/dev/null 2>&1; then
-  eval "$(conda shell.bash hook 2>/dev/null)" || true
-elif [[ -f "$HOME/miniforge3/etc/profile.d/conda.sh" ]]; then
-  source "$HOME/miniforge3/etc/profile.d/conda.sh"
-elif [[ -f "$HOME/mambaforge/etc/profile.d/conda.sh" ]]; then
-  source "$HOME/mambaforge/etc/profile.d/conda.sh"
+USE_CURRENT_ENV=0
+if [[ -n "${LISA_SKIP_CONDA:-}" || -n "${SLURM_JOB_ID:-}" ]]; then
+  USE_CURRENT_ENV=1
 fi
 
-if command -v conda >/dev/null 2>&1; then
+if [[ "$USE_CURRENT_ENV" -eq 0 ]]; then
+  if command -v conda >/dev/null 2>&1; then
+    eval "$(conda shell.bash hook 2>/dev/null)" || true
+  elif [[ -f "$HOME/miniforge3/etc/profile.d/conda.sh" ]]; then
+    source "$HOME/miniforge3/etc/profile.d/conda.sh"
+  elif [[ -f "$HOME/mambaforge/etc/profile.d/conda.sh" ]]; then
+    source "$HOME/mambaforge/etc/profile.d/conda.sh"
+  fi
+fi
+
+if [[ "$USE_CURRENT_ENV" -eq 1 ]]; then
+  echo "  ! using current environment (SLURM/module or LISA_SKIP_CONDA set)"
+elif command -v conda >/dev/null 2>&1; then
   conda activate lisa2026 || echo "  ! conda env lisa2026 unavailable, using current environment"
 else
   echo "  ! conda not available, using current environment"
 fi
 
+PYTHON_BIN="$(command -v python3 || command -v python)"
+
 echo "✓ Environment loaded"
-python --version
-pytorch_version=$(python -c "import torch; print(torch.__version__)" 2>/dev/null || echo "unknown")
-cuda_version=$(python -c "import torch; print(torch.version.cuda)" 2>/dev/null || echo "unknown")
+"$PYTHON_BIN" --version
+pytorch_version=$("$PYTHON_BIN" -c "import torch; print(torch.__version__)" 2>/dev/null || echo "unknown")
+cuda_version=$("$PYTHON_BIN" -c "import torch; print(torch.version.cuda)" 2>/dev/null || echo "unknown")
 echo "  PyTorch: $pytorch_version"
 echo "  CUDA: $cuda_version"
+echo "  Python: $PYTHON_BIN"
 
 DATA_ROOT="${LISA_DATA_ROOT:-/home/rousseau/Data/LISA2026}"
 CSV_PATH="${LISA_CSV_PATH:-$DATA_ROOT/LISA_Task1a_2026.csv}"
@@ -65,7 +77,7 @@ echo "[3/5] Ensuring patient-level split exists..."
 if [[ -f results/splits/task1a_fixed.pkl ]]; then
   echo "  ✓ Split already exists – reusing for fair comparison with RUN_0001"
 else
-  python prepare_split.py \
+  "$PYTHON_BIN" prepare_split.py \
     --csv "$CSV_PATH" \
     --seed 42 \
     --output results/splits/task1a_fixed.pkl
@@ -79,7 +91,7 @@ START_TIME=$(date +%s)
 SMOKE_FLAG=""
 [[ $SMOKE_TEST -eq 1 ]] && SMOKE_FLAG="--smoke_test"
 
-python train_task1a_multilabel.py \
+"$PYTHON_BIN" train_task1a_multilabel.py \
   --config configs/run_0002_upf.yaml \
   $SMOKE_FLAG || { echo "Error during training"; exit 1; }
 
@@ -90,11 +102,11 @@ echo "✓ Training complete ($(( END_TIME - START_TIME ))s)"
 echo ""
 echo "[5/5] Running evaluation and computing metrics..."
 
-python evaluate_task1a_multilabel.py \
+"$PYTHON_BIN" evaluate_task1a_multilabel.py \
   --config configs/run_0002_upf.yaml \
   $SMOKE_FLAG || { echo "Error during evaluation"; exit 1; }
 
-python compute_metrics.py \
+"$PYTHON_BIN" compute_metrics.py \
   --predictions results/runs/RUN_0002/predictions_val.csv \
   --ground-truth "$CSV_PATH" \
   --output results/runs/RUN_0002/metrics.json \

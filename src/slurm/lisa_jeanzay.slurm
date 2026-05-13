@@ -87,6 +87,7 @@ esac
 DATA_DIR="${WORK:-$HOME}/LISA/data"
 export LISA_DATA_ROOT="$DATA_DIR"
 export LISA_CSV_PATH="$DATA_DIR/LISA_Task1a_2026.csv"
+export LISA_SKIP_CONDA=1
 
 echo "======================================================================="
 echo " Job ID    : ${SLURM_JOB_ID:-unknown}"
