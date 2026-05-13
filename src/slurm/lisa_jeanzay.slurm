@@ -30,7 +30,13 @@
 
 set -euo pipefail
 
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# En contexte SLURM, le script est exécuté depuis une copie temporaire
+# (souvent /var/spool). Le vrai dossier de soumission est SLURM_SUBMIT_DIR.
+if [[ -n "${SLURM_SUBMIT_DIR:-}" ]]; then
+    PROJECT_ROOT="$SLURM_SUBMIT_DIR"
+else
+    PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+fi
 cd "$PROJECT_ROOT"
 
 RUN_NAME="${LISA_RUN:-RUN_0002}"
@@ -78,7 +84,6 @@ case "$RUN_NAME" in
         ;;
 esac
 
-CODE_DIR="${WORK:-$HOME}/LISA/lisa2026"
 DATA_DIR="${WORK:-$HOME}/LISA/data"
 
 echo "======================================================================="
