@@ -1,0 +1,128 @@
+# RUN_0002 – UPF-inspired Multi-label Ordinal Classification
+# Single DenseNet264 backbone + 7 heads, trained with EMD + Focal loss.
+# Inspired by UPF's best single-model result (0.836 comp. score, Table 1).
+
+run_id: "0002"
+run_name: "multilabel_emd_focal"
+date: "2026-05-13"
+description: >
+  Multi-label single-model approach. Shared DenseNet264 backbone with 7 ordinal
+  classification heads. Loss = ordinal EMD (captures severity ordering) + Focal
+  (handles class imbalance). Replicates key components of UPF LISA 2025 (Table 1).
+
+# ========== TASKS ==========
+tasks:
+  - Noise
+  - Zipper
+  - Positioning
+  - Banding
+  - Motion
+  - Contrast
+  - Distortion
+
+# ========== DATA CONFIGURATION ==========
+data:
+  csv_path: "/home/rousseau/Data/LISA2026/LISA_Task1a_2026.csv"
+  bids_root: "/home/rousseau/Data/LISA2026"
+  split_pkl: "results/splits/task1a_fixed.pkl"   # Same split as RUN_0001
+
+  spatial_size: [150, 150, 150]
+  crop_mode: "center"
+  pad_mode: "symmetric"
+
+  normalize:
+    method: "intensity"
+    nonzero: false
+
+  loader_kwargs:
+    num_workers: 2
+    pin_memory: true
+
+# ========== TRAINING CONFIGURATION ==========
+training:
+  batch_size: 4           # Slightly smaller: 1 model for 7 tasks, fair GPU budget
+  num_epochs: 70
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-5
+  optimizer: "adam"
+  num_workers: 2
+
+  # Loss: EMD + Focal  (weights from UPF ablation)
+  loss:
+    emd_weight: 1.0       # Ordinal EMD – captures severity ordering
+    focal_weight: 1.0     # Focal – addresses class imbalance
+    focal_gamma: 2.0      # Standard focusing parameter
+    focal_alpha:          # Per-class weights: none < moderate < severe
+      - 0.25              # class 0 – dominates (e.g. 96% Banding)
+      - 0.50              # class 1
+      - 1.00              # class 2 – rarely observed
+
+  scheduler:
+    type: cosine
+    T_max: 70
+    eta_min: 1.0e-6
+
+# ========== EARLY STOPPING ==========
+early_stopping:
+  enabled: true
+  patience: 10
+  monitor: "val_mean_f1"
+  mode: "max"
+
+  save_best: true
+  checkpoint_dir: "outputs/checkpoints/RUN_0002"
+
+# ========== AUGMENTATION ==========
+augmentation:
+  enabled: true
+  spatial:
+    - rotate:
+        prob: 0.2
+        range_x: 15
+        range_y: 15
+        range_z: 10
+    - affine:
+        prob: 0.2
+        scale: [0.05, 0.05, 0.05]
+        translate: [3, 3, 2]
+        mode: "bilinear"
+  intensity:
+    - shift_intensity:
+        prob: 0.2
+        offsets: 0.1
+    - adjust_contrast:
+        prob: 0.2
+        gamma: [0.8, 1.2]
+
+# ========== EVALUATION CONFIGURATION ==========
+evaluation:
+  metrics:
+    - accuracy
+    - f1_macro
+    - f2_macro
+    - precision_macro
+    - recall_macro
+  aggregation: "mean"
+
+# ========== ENVIRONMENT CONFIGURATION ==========
+environment:
+  device: "cuda"
+  seed: 42
+  mixed_precision: false
+  deterministic: true
+
+# ========== LOGGING ==========
+logging:
+  log_dir: "outputs/logs/RUN_0002"
+  log_level: "info"
+  tensorboard: true
+  tensorboard_dir: "outputs/logs/RUN_0002/tensorboard"
+
+# ========== OUTPUT PATHS ==========
+output:
+  checkpoint_dir: "outputs/checkpoints/RUN_0002"
+  log_dir: "outputs/logs/RUN_0002"
+  results_dir: "results/runs/RUN_0002"
+  predictions_file: "results/runs/RUN_0002/predictions_val.csv"
+  metrics_file: "results/runs/RUN_0002/metrics.json"
+  plots_dir: "results/runs/RUN_0002/plots"

@@ -1,0 +1,75 @@
+# Configuration RUN_0001 - Task 2 (Segmentation)
+
+run:
+  id: RUN_0001
+  task: task2
+  split_id: SPLIT_V1_PATIENT_80_20
+  folds: 5
+
+data:
+  root: /home/rousseau/Data/LISA2026
+  dataset_tag: lisa2026_train_v1
+  target_size: 96
+  val_fraction: 0.2
+  patient_level_split: true
+  exclude_rules:
+    - corrupted_volume
+    - missing_volume
+
+model:
+  base_channels: 32
+  c_anat: 16
+  c_mod: 8
+  c_art: 8
+  n_artifacts: 7
+  n_severity: 3
+  n_seg_classes: 14
+  family: nnunet
+  variant: resenc_fullres
+  targets:
+    - hippocampi
+    - basal_ganglia
+
+training:
+  epochs: 120
+  batch_size: 2
+  num_workers: 4
+  save_every: 10
+  viz_every: 10
+  lr: 1.0e-4
+  weight_decay: 1.0e-5
+  lam1a: 0.0
+  lam1b: 0.0
+  lam2: 1.0
+  label_smoothing: 0.0
+  ordinal_weight: 0.0
+  focal_gamma: 0.0
+  ohem_ratio: 0.0
+  lr_encoder_scale: 1.0
+  augment: true
+  simulate_artifacts: false
+  augmentation_mode: torchio_full
+  early_stopping_patience: 20
+  # Metadata only: intended conceptual baseline.
+  baseline_profile: nnunet_resenc_inspired
+  loss:
+    type: dice_plus_ce
+  scheduler:
+    type: cosine
+    T_max: 120
+
+inference:
+  ensemble_folds: true
+  postprocessing:
+    keep_largest_connected_component_if_needed: true
+    minimal_postprocessing: true
+
+evaluation:
+  metrics:
+    - dsc
+    - hd95
+    - hd
+    - rve
+    - assd
+  ranking:
+    type: mean_normalized_metrics

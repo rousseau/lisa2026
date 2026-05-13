@@ -1,0 +1,138 @@
+# RUN_0001 – Baseline Configuration
+# UPF-Inspired Ordinal Classification Baseline for Task 1a
+
+run_id: "0001"
+run_name: "baseline_task1a_ordinal"
+date: "2026-05-12"
+description: "Single-model ordinal classification baseline per artifact (7 independent models)"
+
+# ========== TASKS ==========
+tasks:
+  - Noise
+  - Zipper
+  - Positioning
+  - Banding
+  - Motion
+  - Contrast
+  - Distortion
+
+# ========== DATA CONFIGURATION ==========
+data:
+  csv_path: "/home/rousseau/Data/LISA2026/LISA_Task1a_2026.csv"
+  bids_root: "/home/rousseau/Data/LISA2026"
+  split_pkl: "results/splits/task1a_fixed.pkl"
+  
+  # Spatial configuration
+  spatial_size: [150, 150, 150]
+  crop_mode: "center"      # CenterCrop before Pad
+  pad_mode: "symmetric"
+  
+  # Preprocessing
+  normalize:
+    method: "intensity"    # Channel-wise intensity normalization
+    nonzero: false
+  
+  # Loading
+  loader_kwargs:
+    num_workers: 2
+    pin_memory: true
+
+# ========== TRAINING CONFIGURATION ==========
+training:
+  batch_size: 8
+  num_epochs: 70
+  learning_rate: 1.0e-4
+  optimizer: "adam"
+  
+  # Loss function
+  loss_type: "cross_entropy"  # Implemented baseline loss in train_task1a.py
+  loss_weights:
+    contrastive: 0.0        # Disabled in mono-model setup
+    emd: 1.0
+    focal: 0.0              # Can enable if needed
+  
+  # Learning rate schedule (optional)
+  scheduler: null           # No scheduler; rely on early stopping
+
+# ========== EARLY STOPPING ==========
+early_stopping:
+  enabled: true
+  patience: 10
+  monitor: "val_f1_macro"
+  mode: "max"
+  min_delta: 0.001
+  
+  # Checkpoint saving
+  save_best: true
+  checkpoint_dir: "outputs/checkpoints/RUN_0001"
+
+# ========== AUGMENTATION CONFIGURATION (train only) ==========
+augmentation:
+  enabled: true
+  
+  # Spatial transforms
+  spatial:
+    - rotate:
+        prob: 0.2
+        range_x: 15
+        range_y: 15
+        range_z: 10
+    - affine:
+        prob: 0.2
+        scale: [0.05, 0.05, 0.05]
+        translate: [3, 3, 2]
+        mode: "bilinear"
+  
+  # Intensity transforms
+  intensity:
+    - shift_intensity:
+        prob: 0.2
+        offsets: 0.1
+    - adjust_contrast:
+        prob: 0.2
+        gamma: [0.8, 1.2]
+
+# ========== EVALUATION CONFIGURATION ==========
+evaluation:
+  metrics:
+    - accuracy
+    - f1_macro
+    - f2_macro
+    - precision_macro
+    - recall_macro
+  
+  # Metric aggregation (challenge scoring)
+  aggregation: "mean"  # Simple mean of 5 metrics
+  
+  # Ordinal-specific metrics (monitoring only)
+  ordinal_metrics:
+    - mae
+    - off_by_one_accuracy
+
+# ========== ENVIRONMENT CONFIGURATION ==========
+environment:
+  device: "cuda"
+  seed: 42
+  mixed_precision: false
+  deterministic: true
+
+# ========== LOGGING ==========
+logging:
+  log_dir: "outputs/logs/RUN_0001"
+  log_level: "info"
+  
+  # PyTorch Lightning logging
+  tensorboard: true
+  tensorboard_dir: "outputs/logs/RUN_0001/tensorboard"
+  
+  # Periodic checkpoints
+  log_every_n_steps: 50
+
+# ========== OUTPUT PATHS ==========
+output:
+  checkpoint_dir: "outputs/checkpoints/RUN_0001"
+  log_dir: "outputs/logs/RUN_0001"
+  results_dir: "results/runs/RUN_0001"
+  predictions_file: "results/runs/RUN_0001/predictions_val.csv"
+  metrics_file: "results/runs/RUN_0001/metrics.json"
+  plots_dir: "results/runs/RUN_0001/plots"
