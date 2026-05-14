@@ -75,12 +75,16 @@ if [[ "$RUN_NAME" =~ ^[0-9]+$ ]]; then
 fi
 
 case "$RUN_NAME" in
-    RUN_0001|RUN_0002|RUN_0003)
+    RUN_0001|RUN_0002|RUN_0003|RUN_0004)
         RUN_SCRIPT="scripts/run_${RUN_NAME#RUN_}.sh"
+        ;;
+    RUN_0003_COLLAPSED|RUN_0003_EXP_C)
+        # Pas de wrapper shell dédié — routé via train.py directement
+        RUN_SCRIPT=""
         ;;
     *)
         echo "[ERREUR] Run inconnu: $RUN_NAME"
-        echo "         Runs disponibles: RUN_0001, RUN_0002, RUN_0003"
+        echo "         Runs disponibles: RUN_0001, RUN_0002, RUN_0003, RUN_0003_COLLAPSED, RUN_0003_EXP_C, RUN_0004"
         exit 1
         ;;
 esac
@@ -141,10 +145,17 @@ mkdir -p "$PROJECT_ROOT/results/splits"
 
 cd "$PROJECT_ROOT"
 
-echo ""
-echo "Lancement : bash $RUN_SCRIPT ${EXTRA_ARGS[*]:-}"
-echo ""
-
-bash "$RUN_SCRIPT" "${EXTRA_ARGS[@]}"
+# Pour les runs sans wrapper shell dédié, appel direct à train.py
+if [[ "$RUN_NAME" == "RUN_0003_COLLAPSED" || "$RUN_NAME" == "RUN_0003_EXP_C" ]]; then
+    echo ""
+    echo "Lancement via train.py : python3 train.py --run ${RUN_NAME#RUN_} ${EXTRA_ARGS[*]:-}"
+    echo ""
+    python3 train.py --run "${RUN_NAME#RUN_}" "${EXTRA_ARGS[@]}"
+else
+    echo ""
+    echo "Lancement : bash $RUN_SCRIPT ${EXTRA_ARGS[*]:-}"
+    echo ""
+    bash "$RUN_SCRIPT" "${EXTRA_ARGS[@]}"
+fi
 
 echo "Entraînement terminé (job ${SLURM_JOB_ID:-unknown})."

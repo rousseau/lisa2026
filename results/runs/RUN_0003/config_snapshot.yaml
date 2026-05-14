@@ -1,0 +1,6 @@
+run_id: "0003"
+config_path: "configs/run_0003_task2_dynunet.yaml"
+train_script: "train_task2_dynunet.py"
+eval_script: "evaluate_task2_dynunet.py"
+split_file: "results/splits/task2_fixed.pkl"
+notes: "Snapshot created at implementation time; cluster execution may override runtime env paths."

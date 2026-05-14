@@ -1,0 +1,86 @@
+# RUN_0001 – Configuration Snapshot
+# Exact configuration used for training (auto-generated from run_0001_baseline.yaml)
+# Timestamp: 2026-05-12
+
+run_id: "0001"
+run_name: "baseline_task1a_ordinal"
+date: "2026-05-12"
+
+# ===== EXECUTION PARAMETERS =====
+tasks:
+  - Noise
+  - Zipper
+  - Positioning
+  - Banding
+  - Motion
+  - Contrast
+  - Distortion
+
+data:
+  csv_path: "/home/rousseau/Data/LISA2026/LISA_Task1a_2026.csv"
+  bids_root: "/home/rousseau/Data/LISA2026"
+  split_pkl: "results/splits/task1a_fixed.pkl"
+  spatial_size: [150, 150, 150]
+  crop_mode: "center"
+  pad_mode: "symmetric"
+  normalization: "intensity (channel-wise, nonzero=False)"
+
+training:
+  batch_size: 8
+  num_epochs: 70
+  learning_rate: 1.0e-4
+  optimizer: "adam"
+  loss_function: "cross_entropy"
+  early_stopping_patience: 10
+  monitor_metric: "val_f1_macro"
+
+augmentation:
+  enabled: true
+  transforms:
+    - "RandRotate(prob=0.2, angles=(15°, 15°, 10°))"
+    - "RandAffine(prob=0.2, scale=0.05, translate=(3, 3, 2))"
+    - "RandIntensityShift(prob=0.2, offsets=0.1)"
+    - "RandAdjustContrast(prob=0.2, gamma=(0.8, 1.2))"
+
+evaluation:
+  split: "validation"
+  metrics: ["Accuracy", "F1_macro", "F2_macro", "Precision_macro", "Recall_macro"]
+  ordinal_metrics: ["MAE", "off_by_one_accuracy"]
+  aggregation_method: "mean"
+
+# ===== ENVIRONMENT =====
+python_version: "3.10.20"
+pytorch_version: "2.11.0+cu130"
+cuda_version: "13.0"
+gpu_model: "NVIDIA GB10"
+
+# ===== DATA SPLIT =====
+split_seed: 42
+split_method: "StratifiedGroupKFold(k=5, shuffle=True)"
+split_file: "results/splits/task1a_fixed.pkl"
+
+# ===== TRAINING SUMMARY =====
+training_date_start: "2026-05-12 09:12:32 CEST"
+training_date_end: "2026-05-12 12:39:49 CEST"
+training_duration_hours: 3.44
+
+# Per-task best epochs (filled after training)
+best_epochs:
+  Noise: 15
+  Zipper: 22
+  Positioning: 23
+  Banding: 19
+  Motion: 19
+  Contrast: 30
+  Distortion: 28
+
+# ===== RESULT SUMMARY =====
+global_score: 0.6887
+per_task_scores:
+  Noise: 0.7394
+  Zipper: 0.6638
+  Positioning: 0.8094
+  Banding: 0.6416
+  Motion: 0.6394
+  Contrast: 0.6902
+  Distortion: 0.6373

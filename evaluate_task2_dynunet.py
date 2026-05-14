@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 """Evaluate DynUNet baseline for LISA 2026 Task 2 (RUN_0003)."""
+
 import argparse
 import json
 import os
@@ -10,11 +11,11 @@ import torch
 import yaml
 from monai.inferers import sliding_window_inference
 from monai.metrics import compute_average_surface_distance, compute_hausdorff_distance
+from scipy import ndimage
 from tqdm import tqdm
 
 from src.datasets import get_task2_seg_dataloaders
 from src.models import Task2DynUNetModel
-
 
 EPS = 1e-8
 
@@ -39,10 +40,61 @@ def compute_rve(pred: torch.Tensor, target: torch.Tensor):
     return float(abs(pred_vol - true_vol) / (true_vol + EPS))
 
 
+def keep_largest_connected_per_class(pred: np.ndarray, num_classes: int) -> np.ndarray:
+    out = np.zeros_like(pred)
+    for class_id in range(1, num_classes):
+        mask = pred == class_id
+        if not np.any(mask):
+            continue
+        labeled, n_comp = ndimage.label(mask)
+        if n_comp <= 1:
+            out[mask] = class_id
+            continue
+        sizes = ndimage.sum(mask, labeled, index=np.arange(1, n_comp + 1))
+        keep = int(np.argmax(sizes)) + 1
+        out[labeled == keep] = class_id
+    return out
+
+
+def infer_logits_tta(
+    model, image, roi_size, overlap, sw_batch_size, use_amp, tta_axes=None
+):
+    if not tta_axes:
+        with torch.amp.autocast("cuda", enabled=use_amp):
+            return sliding_window_inference(
+                image,
+                roi_size=roi_size,
+                sw_batch_size=sw_batch_size,
+                predictor=model,
+                overlap=overlap,
+            )
+
+    logits_sum = None
+    variants = [None] + [tuple(ax) for ax in tta_axes]
+
+    for axes in variants:
+        inp = torch.flip(image, dims=axes) if axes is not None else image
+        with torch.amp.autocast("cuda", enabled=use_amp):
+            logits = sliding_window_inference(
+                inp,
+                roi_size=roi_size,
+                sw_batch_size=sw_batch_size,
+                predictor=model,
+                overlap=overlap,
+            )
+        if axes is not None:
+            logits = torch.flip(logits, dims=axes)
+        logits_sum = logits if logits_sum is None else logits_sum + logits
+
+    return logits_sum / float(len(variants))
+
+
 @torch.no_grad()
 def evaluate(config: dict, smoke_test: bool = False):
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    use_amp = bool(config["environment"].get("mixed_precision", True)) and device == "cuda"
+    use_amp = (
+        bool(config["environment"].get("mixed_precision", True)) and device == "cuda"
+    )
 
     data_root = os.getenv("LISA_DATA_ROOT", config["data"]["data_root"])
     split_pkl = os.getenv("LISA_TASK2_SPLIT_PKL", config["data"]["split_pkl"])
@@ -56,6 +108,7 @@ def evaluate(config: dict, smoke_test: bool = False):
         label_suffix=config["data"].get("label_suffix", "_LF_seg.nii.gz"),
         patch_size=to_3tuple(config["data"]["patch_size"]),
         num_samples_per_volume=1,
+        collapse_labels=bool(config["data"].get("collapse_labels", False)),
     )
 
     model_cfg = config["model"]
@@ -66,13 +119,17 @@ def evaluate(config: dict, smoke_test: bool = False):
         out_channels=num_classes,
         kernel_size=tuple(tuple(int(x) for x in ks) for ks in model_cfg["kernel_size"]),
         strides=tuple(tuple(int(x) for x in st) for st in model_cfg["strides"]),
-        upsample_kernel_size=tuple(tuple(int(x) for x in st) for st in model_cfg["upsample_kernel_size"]),
+        upsample_kernel_size=tuple(
+            tuple(int(x) for x in st) for st in model_cfg["upsample_kernel_size"]
+        ),
         filters=tuple(int(x) for x in model_cfg["filters"]),
         norm_name=model_cfg.get("norm_name", "instance"),
         deep_supervision=bool(model_cfg.get("deep_supervision", False)),
     ).to(device)
 
-    ckpt_path = os.path.join(config["output"]["checkpoint_dir"], "task2_dynunet_best.pt")
+    ckpt_path = os.path.join(
+        config["output"]["checkpoint_dir"], "task2_dynunet_best.pt"
+    )
     if not os.path.exists(ckpt_path):
         raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
 
@@ -83,6 +140,10 @@ def evaluate(config: dict, smoke_test: bool = False):
     roi_size = to_3tuple(config["data"]["val_roi_size"])
     overlap = float(config["inference"]["overlap"])
     sw_batch_size = int(config["inference"]["sw_batch_size"])
+    tta_axes = config["inference"].get("tta_flip_axes", [])
+    keep_largest_component = bool(
+        config["inference"].get("keep_largest_component", False)
+    )
 
     results_rows = []
 
@@ -91,21 +152,44 @@ def evaluate(config: dict, smoke_test: bool = False):
         label = batch["label"].to(device).long()
         subject = batch["subject"][0]
 
-        with torch.amp.autocast("cuda", enabled=use_amp):
-            logits = sliding_window_inference(
-                image,
-                roi_size=roi_size,
-                sw_batch_size=sw_batch_size,
-                predictor=model,
-                overlap=overlap,
-            )
+        logits = infer_logits_tta(
+            model=model,
+            image=image,
+            roi_size=roi_size,
+            overlap=overlap,
+            sw_batch_size=sw_batch_size,
+            use_amp=use_amp,
+            tta_axes=tta_axes,
+        )
 
         pred = torch.argmax(logits, dim=1).cpu()
+
+        # Determine collapse_labels from config
+        collapse_labels = bool(config["data"].get("collapse_labels", False))
+
+        # For collapsed labels, evaluate on collapsed classes (1–6).
+        # For 12-class models, predictions are already in the correct label space;
+        # no remapping is needed or valid here.
+        if collapse_labels:
+            num_classes = 7  # collapsed classes: bg(0) + 6 structures
+        else:
+            num_classes = int(config["model"]["out_channels"])  # typically 12
+
+        if keep_largest_component:
+            pred_np = pred.squeeze(0).numpy().astype(np.int16)
+            pred_np = keep_largest_connected_per_class(pred_np, num_classes=num_classes)
+            pred = torch.from_numpy(pred_np[None])
         target = label.squeeze(1).cpu()
 
-        for class_id in range(1, num_classes):
-            pred_bin = (pred == class_id)
-            target_bin = (target == class_id)
+        # Evaluate on collapsed classes (1-6) or original classes (1-11)
+        if collapse_labels:
+            eval_classes = list(range(1, 7))  # collapsed classes
+        else:
+            eval_classes = list(range(1, num_classes))
+
+        for class_id in eval_classes:
+            pred_bin = pred == class_id
+            target_bin = target == class_id
 
             pred_has = bool(pred_bin.any())
             target_has = bool(target_bin.any())
@@ -141,9 +225,15 @@ def evaluate(config: dict, smoke_test: bool = False):
                     symmetric=True,
                 )
 
-                hd95 = float(torch.nan_to_num(hd95_t, nan=0.0, posinf=1e6, neginf=0.0).item())
-                hd = float(torch.nan_to_num(hd_t, nan=0.0, posinf=1e6, neginf=0.0).item())
-                assd = float(torch.nan_to_num(assd_t, nan=0.0, posinf=1e6, neginf=0.0).item())
+                hd95 = float(
+                    torch.nan_to_num(hd95_t, nan=0.0, posinf=1e6, neginf=0.0).item()
+                )
+                hd = float(
+                    torch.nan_to_num(hd_t, nan=0.0, posinf=1e6, neginf=0.0).item()
+                )
+                assd = float(
+                    torch.nan_to_num(assd_t, nan=0.0, posinf=1e6, neginf=0.0).item()
+                )
                 rve = compute_rve(pred_bin, target_bin)
             else:
                 dsc = 0.0
@@ -211,7 +301,9 @@ def evaluate(config: dict, smoke_test: bool = False):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, default="configs/run_0003_task2_dynunet.yaml")
+    parser.add_argument(
+        "--config", type=str, default="configs/run_0003_task2_dynunet.yaml"
+    )
     parser.add_argument("--smoke_test", action="store_true")
     args = parser.parse_args()
 

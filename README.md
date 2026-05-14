@@ -22,11 +22,11 @@ lisa2026/
 
 ## Tâches
 
-| Task | Description |
-|------|-------------|
-| Task 1a | Classification multi-label d'artefacts (7 classes : Noise, Zipper, Positioning, Banding, Motion, Contrast, Distortion) |
-| Task 1b | Amélioration qualité (suppression bruit / mouvement pour que Task 1a classe sans artefact) |
-| Task 2  | Segmentation multi-structures (hippocampes, noyaux caudés, putamens, globus pallidus, thalami, corps calleux, ventricules latéraux) |
+| Task | Description | Meilleur run |
+|------|-------------|---------------|
+| Task 1a | Classification multi-label d'artefacts (7 classes : Noise, Zipper, Positioning, Banding, Motion, Contrast, Distortion) | RUN_0002 |
+| Task 1b | Amélioration qualité (suppression bruit / mouvement) — à lancer | RUN_0004 (en cours) |
+| Task 2  | Segmentation multi-structures (hippocampes, noyaux caudés, putamens, globus pallidus, thalami, corps calleux, ventricules latéraux) | **RUN_0003_EXP_C** (DSC=0.631) |
 
 ## Dépendances
 
@@ -34,6 +34,19 @@ lisa2026/
 conda activate lisa   # à créer
 pip install nibabel pandas numpy matplotlib scikit-learn
 ```
+
+## Runs actifs
+
+| Run ID | Task | Statut | Description |
+|--------|------|--------|-------------|
+| RUN_0001 | 1a | ✅ baseline | Classification per-artefact (7 modèles indépendants) |
+| RUN_0002 | 1a | ✅ actif | Multi-label ordinal avec EMD + Focal loss |
+| RUN_0003 | 2 | ✅ baseline | DynUNet 7-class, patch 96³ |
+| RUN_0003_COLLAPSED | 2 | ✅ actif | DynUNet 6-class (hippocampes fusionnés) |
+| **RUN_0003_EXP_C** | **2** | **✅ winner** | **DynUNet + augmentation symétrique corrigée, DSC=0.631** |
+| RUN_0004 | 1b | 🔜 à lancer | U-Net débruitage / suppression artefacts |
+
+Runs archivés (non maintenus) : RUN_0003_EXP_A (training failed), RUN_0003_EXP_B (checkpoint skip), RUN_0003_EXP_C_TTA (TTA cassé), RUN_0003_EXP_SYM (régression).
 
 ## Lancement sur Jean Zay
 
@@ -44,7 +57,8 @@ Exemples :
 ```bash
 sbatch src/slurm/lisa_jeanzay.slurm --run RUN_0001
 sbatch src/slurm/lisa_jeanzay.slurm --run RUN_0002
-sbatch src/slurm/lisa_jeanzay.slurm --run RUN_0002 --smoke-test
+sbatch src/slurm/lisa_jeanzay.slurm --run RUN_0003_EXP_C --smoke-test
+sbatch src/slurm/lisa_jeanzay.slurm --run RUN_0004
 ```
 
-Les wrappers correspondants sont [scripts/run_0001.sh](scripts/run_0001.sh) et [scripts/run_0002.sh](scripts/run_0002.sh). Le run 0002 reprend l'approche multi-label ordinal avec EMD + Focal.
+Les wrappers shell (`scripts/run_XXXX.sh`) couvrent les runs 0001–0004. Les runs `0003_COLLAPSED` et `0003_EXP_C` sont routés directement via `train.py` / `evaluate.py`.

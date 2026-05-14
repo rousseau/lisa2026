@@ -37,4 +37,6 @@ paper/*.pdf
 .DS_Store
 ._.DS_Store
 doc/
-results/
+# results/ est intentionnellement tracké (documentation scientifique légère)
+# Seules les prédictions lourdes sont exclues :
+results/**/*.csv

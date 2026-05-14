@@ -1,0 +1,17 @@
+[
+  {
+    "subject": "LISA_0018",
+    "mean_dsc": 0.6507616816262025,
+    "plot": "results/runs/RUN_0003/plots/run0003_seg_LISA_0018.png"
+  },
+  {
+    "subject": "LISA_0050",
+    "mean_dsc": 0.5698039303913756,
+    "plot": "results/runs/RUN_0003/plots/run0003_seg_LISA_0050.png"
+  },
+  {
+    "subject": "LISA_1001",
+    "mean_dsc": 0.23770323610410238,
+    "plot": "results/runs/RUN_0003/plots/run0003_seg_LISA_1001.png"
+  }
+]

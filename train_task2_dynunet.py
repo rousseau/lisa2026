@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 """Train DynUNet baseline for LISA 2026 Task 2 (RUN_0003)."""
+
 import argparse
 import json
 import os
@@ -7,11 +8,13 @@ import random
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 import yaml
 from monai.inferers import sliding_window_inference
-from monai.losses import DiceCELoss
+from monai.losses import DiceCELoss, DiceFocalLoss
 from monai.metrics import DiceMetric
 from torch.optim import AdamW
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm import tqdm
 
 from src.datasets import get_task2_seg_dataloaders
@@ -42,7 +45,11 @@ class Task2Trainer:
             torch.backends.cudnn.benchmark = False
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.use_amp = bool(config["environment"].get("mixed_precision", True)) and self.device == "cuda"
+        self.use_amp = (
+            bool(config["environment"].get("mixed_precision", True))
+            and self.device == "cuda"
+        )
+        self.num_classes = int(config["model"]["out_channels"])
 
         data_root = os.getenv("LISA_DATA_ROOT", config["data"]["data_root"])
         split_pkl = os.getenv("LISA_TASK2_SPLIT_PKL", config["data"]["split_pkl"])
@@ -67,6 +74,8 @@ class Task2Trainer:
             label_suffix=config["data"].get("label_suffix", "_LF_seg.nii.gz"),
             patch_size=patch_size,
             num_samples_per_volume=train_num_samples,
+            num_classes=int(config["model"]["out_channels"]),
+            collapse_labels=bool(config["data"].get("collapse_labels", False)),
         )
 
         self.n_train = n_train
@@ -76,26 +85,47 @@ class Task2Trainer:
         self.model = Task2DynUNetModel(
             in_channels=int(model_cfg["in_channels"]),
             out_channels=int(model_cfg["out_channels"]),
-            kernel_size=tuple(tuple(int(x) for x in ks) for ks in model_cfg["kernel_size"]),
+            kernel_size=tuple(
+                tuple(int(x) for x in ks) for ks in model_cfg["kernel_size"]
+            ),
             strides=tuple(tuple(int(x) for x in st) for st in model_cfg["strides"]),
-            upsample_kernel_size=tuple(tuple(int(x) for x in st) for st in model_cfg["upsample_kernel_size"]),
+            upsample_kernel_size=tuple(
+                tuple(int(x) for x in st) for st in model_cfg["upsample_kernel_size"]
+            ),
             filters=tuple(int(x) for x in model_cfg["filters"]),
             norm_name=model_cfg.get("norm_name", "instance"),
             deep_supervision=bool(model_cfg.get("deep_supervision", False)),
         ).to(self.device)
 
-        self.loss_fn = DiceCELoss(
-            include_background=True,
-            to_onehot_y=True,
-            softmax=True,
-            lambda_dice=float(config["training"]["loss"].get("lambda_dice", 1.0)),
-            lambda_ce=float(config["training"]["loss"].get("lambda_ce", 1.0)),
-        )
+        loss_cfg = config["training"].get("loss", {})
+        self.loss_type = loss_cfg.get("type", "dice_ce")
+        if self.loss_type == "dice_focal":
+            self.loss_fn = DiceFocalLoss(
+                include_background=False,
+                to_onehot_y=True,
+                softmax=True,
+                lambda_dice=float(loss_cfg.get("lambda_dice", 1.0)),
+                lambda_focal=float(loss_cfg.get("lambda_focal", 1.0)),
+                gamma=float(loss_cfg.get("focal_gamma", 2.0)),
+            )
+        else:
+            self.loss_fn = DiceCELoss(
+                include_background=False,
+                to_onehot_y=True,
+                softmax=True,
+                lambda_dice=float(loss_cfg.get("lambda_dice", 1.0)),
+                lambda_ce=float(loss_cfg.get("lambda_ce", 1.0)),
+            )
 
         self.optimizer = AdamW(
             self.model.parameters(),
             lr=float(config["training"]["learning_rate"]),
             weight_decay=float(config["training"]["weight_decay"]),
+        )
+        self.scheduler = CosineAnnealingLR(
+            self.optimizer,
+            T_max=max(1, int(config["training"].get("num_epochs", 1))),
+            eta_min=float(config["training"].get("min_learning_rate", 1.0e-6)),
         )
 
         self.scaler = torch.amp.GradScaler("cuda", enabled=self.use_amp)
@@ -111,6 +141,49 @@ class Task2Trainer:
         self.ckpt_path = os.path.join(self.ckpt_dir, "task2_dynunet_best.pt")
         self.history_path = os.path.join(self.results_dir, "training_history.json")
 
+        pretrained = config["training"].get("pretrained_checkpoint", "")
+        self.pretrained_loaded = False
+        if pretrained and os.path.exists(pretrained):
+            state = torch.load(pretrained, map_location=self.device)
+            try:
+                self.model.load_state_dict(state["model_state_dict"])
+                self.pretrained_loaded = True
+                print(f"[INFO] Loaded pretrained checkpoint: {pretrained}")
+            except RuntimeError as err:
+                import warnings
+
+                warnings.warn(
+                    f"[WARNING] Pretrained checkpoint SKIPPED — architecture mismatch: {err}\n"
+                    f"  Checkpoint: {pretrained}\n"
+                    f"  Model filters: {config['model'].get('filters')}\n"
+                    "  Training will proceed from scratch (random init).",
+                    stacklevel=2,
+                )
+                print(
+                    f"[WARNING] Skipping pretrained checkpoint (incompatible architecture)."
+                )
+                print(f"  Checkpoint : {pretrained}")
+                print(f"  Model will be trained from scratch (random initialisation).")
+        elif pretrained and not os.path.exists(pretrained):
+            import warnings
+
+            warnings.warn(
+                f"[WARNING] Pretrained checkpoint path not found: {pretrained}\n"
+                "  Training will proceed from scratch.",
+                stacklevel=2,
+            )
+
+        self.symmetry_weight = float(
+            config["training"].get("symmetry_consistency_weight", 0.0)
+        )
+        self.symmetry_flip_axes = [
+            int(ax) for ax in config["training"].get("symmetry_flip_axes", [])
+        ]
+        self.symmetry_channel_permutation = self._build_symmetry_channel_permutation(
+            config["training"].get("symmetry_channel_pairs", []),
+            self.num_classes,
+        )
+
         self.best_val_dice = -1.0
         self.patience_counter = 0
 
@@ -122,6 +195,39 @@ class Task2Trainer:
 
         print(f"Device: {self.device} | AMP: {self.use_amp}")
         print(f"Task2 train subjects: {self.n_train}, val subjects: {self.n_val}")
+        print(f"Loss: {self.loss_type}")
+        print(
+            f"Symmetry consistency: weight={self.symmetry_weight} axes={self.symmetry_flip_axes}"
+        )
+
+    @staticmethod
+    def _build_symmetry_channel_permutation(channel_pairs, num_classes):
+        permutation = list(range(num_classes))
+        for left_class, right_class in channel_pairs:
+            left_index = int(left_class)
+            right_index = int(right_class)
+            if left_index < num_classes and right_index < num_classes:
+                permutation[left_index] = right_index
+                permutation[right_index] = left_index
+        return permutation
+
+    def _symmetry_consistency_loss(self, images):
+        if self.symmetry_weight <= 0.0 or len(self.symmetry_flip_axes) == 0:
+            return torch.tensor(0.0, device=self.device)
+
+        with torch.no_grad():
+            ref_logits = self.model(images)
+            ref_probs = torch.softmax(ref_logits, dim=1)
+
+        total = 0.0
+        for axis in self.symmetry_flip_axes:
+            flipped_images = torch.flip(images, dims=[axis])
+            flip_logits = self.model(flipped_images)
+            flip_probs = torch.softmax(torch.flip(flip_logits, dims=[axis]), dim=1)
+            flip_probs = flip_probs[:, self.symmetry_channel_permutation]
+            total = total + F.mse_loss(flip_probs, ref_probs)
+
+        return total / max(1, len(self.symmetry_flip_axes))
 
     def train_one_epoch(self):
         self.model.train()
@@ -135,7 +241,9 @@ class Task2Trainer:
 
             with torch.amp.autocast("cuda", enabled=self.use_amp):
                 logits = self.model(images)
-                loss = self.loss_fn(logits, labels)
+                seg_loss = self.loss_fn(logits, labels)
+                sym_loss = self._symmetry_consistency_loss(images)
+                loss = seg_loss + self.symmetry_weight * sym_loss
 
             self.scaler.scale(loss).backward()
             self.scaler.step(self.optimizer)
@@ -172,12 +280,22 @@ class Task2Trainer:
             total_val_loss += float(loss.item())
 
             pred = torch.argmax(logits, dim=1, keepdim=True)
-            pred_one_hot = torch.nn.functional.one_hot(
-                pred.squeeze(1), num_classes=int(self.config["model"]["out_channels"])
-            ).permute(0, 4, 1, 2, 3).float()
-            label_one_hot = torch.nn.functional.one_hot(
-                labels.squeeze(1).long(), num_classes=int(self.config["model"]["out_channels"])
-            ).permute(0, 4, 1, 2, 3).float()
+            pred_one_hot = (
+                torch.nn.functional.one_hot(
+                    pred.squeeze(1),
+                    num_classes=int(self.config["model"]["out_channels"]),
+                )
+                .permute(0, 4, 1, 2, 3)
+                .float()
+            )
+            label_one_hot = (
+                torch.nn.functional.one_hot(
+                    labels.squeeze(1).long(),
+                    num_classes=int(self.config["model"]["out_channels"]),
+                )
+                .permute(0, 4, 1, 2, 3)
+                .float()
+            )
             dice_metric(y_pred=pred_one_hot, y=label_one_hot)
 
             if self.smoke_test and batch_idx >= 0:
@@ -202,7 +320,18 @@ class Task2Trainer:
         )
 
     def train(self):
-        history = []
+        # Record run metadata at the top of the history for traceability
+        run_meta = {
+            "run_id": self.config.get("run_id", "unknown"),
+            "pretrained_checkpoint_requested": self.config["training"].get(
+                "pretrained_checkpoint", ""
+            ),
+            "pretrained_checkpoint_loaded": self.pretrained_loaded,
+            "device": self.device,
+            "num_classes": self.num_classes,
+            "filters": list(self.config["model"].get("filters", [])),
+        }
+        history = [run_meta]
 
         for epoch in range(self.num_epochs):
             train_loss = self.train_one_epoch()
@@ -232,6 +361,8 @@ class Task2Trainer:
                     print(f"  -> Early stopping at epoch {epoch + 1}")
                     break
 
+            self.scheduler.step()
+
             if self.smoke_test:
                 break
 
@@ -249,7 +380,9 @@ def load_config(config_path: str):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, default="configs/run_0003_task2_dynunet.yaml")
+    parser.add_argument(
+        "--config", type=str, default="configs/run_0003_task2_dynunet.yaml"
+    )
     parser.add_argument("--smoke_test", action="store_true")
     args = parser.parse_args()
 

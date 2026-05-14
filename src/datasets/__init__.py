@@ -1,19 +1,40 @@
 """
 Task 1a Dataset and DataLoader
 """
+
 import os
 import pickle
 import re
+
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import Dataset, DataLoader
-from monai.transforms import Compose, LoadImaged, EnsureChannelFirstd, NormalizeIntensityd, CenterSpatialCropd, SpatialPadd, ToTensord, RandRotated, RandAffined, RandShiftIntensityd, RandAdjustContrastd, EnsureTyped, RandFlipd, RandGaussianNoised, RandScaleIntensityd, RandCropByPosNegLabeld
+from monai.transforms import (
+    CenterSpatialCropd,
+    Compose,
+    EnsureChannelFirstd,
+    EnsureTyped,
+    LoadImaged,
+    NormalizeIntensityd,
+    RandAdjustContrastd,
+    RandAffined,
+    RandCropByLabelClassesd,
+    RandCropByPosNegLabeld,
+    RandFlipd,
+    RandGaussianNoised,
+    RandGaussianSmoothd,
+    RandRotated,
+    RandScaleIntensityd,
+    RandShiftIntensityd,
+    SpatialPadd,
+    ToTensord,
+)
+from torch.utils.data import DataLoader, Dataset
 
 
 class Task1aDataset(Dataset):
     """Task 1a Quality Assessment Dataset"""
-    
+
     def __init__(self, csv_path, bids_root, split_pkl, fold, task_name, stage="train"):
         """
         Args:
@@ -29,25 +50,25 @@ class Task1aDataset(Dataset):
         self.fold = fold
         self.task_name = task_name
         self.stage = stage
-        
+
         # Load CSV
         self.df = pd.read_csv(csv_path)
-        
+
         # Load split
-        with open(split_pkl, 'rb') as f:
+        with open(split_pkl, "rb") as f:
             self.split = pickle.load(f)
-        
+
         # Filter by fold
-        if fold == 'train':
-            indices = self.split.get('train_indices', [])
+        if fold == "train":
+            indices = self.split.get("train_indices", [])
         else:
-            indices = self.split.get('val_indices', [])
-        
+            indices = self.split.get("val_indices", [])
+
         self.df = self.df.iloc[indices].reset_index(drop=True)
-        
+
         # Build transforms
         self.transforms = self._build_transforms(stage)
-    
+
     def _build_transforms(self, stage):
         """Build MONAI transform pipeline"""
         base_transforms = [
@@ -57,52 +78,89 @@ class Task1aDataset(Dataset):
             CenterSpatialCropd(keys=["img"], roi_size=(150, 150, 150)),
             SpatialPadd(keys=["img"], spatial_size=(150, 150, 150), mode="symmetric"),
         ]
-        
+
         if stage == "train":
             augmentations = [
-                RandRotated(keys=["img"], prob=0.2, range_x=np.deg2rad(15), range_y=np.deg2rad(15), range_z=np.deg2rad(10), mode="bilinear"),
-                RandAffined(keys=["img"], prob=0.2, scale_range=(0.05, 0.05, 0.05), translate_range=(3, 3, 2), mode="bilinear"),
+                RandRotated(
+                    keys=["img"],
+                    prob=0.2,
+                    range_x=np.deg2rad(15),
+                    range_y=np.deg2rad(15),
+                    range_z=np.deg2rad(10),
+                    mode="bilinear",
+                ),
+                RandAffined(
+                    keys=["img"],
+                    prob=0.2,
+                    scale_range=(0.05, 0.05, 0.05),
+                    translate_range=(3, 3, 2),
+                    mode="bilinear",
+                ),
                 RandShiftIntensityd(keys=["img"], prob=0.2, offsets=0.1),
                 RandAdjustContrastd(keys=["img"], prob=0.2, gamma=(0.8, 1.2)),
             ]
             base_transforms.extend(augmentations)
-        
+
         base_transforms.append(ToTensord(keys=["img"]))
-        
+
         return Compose(base_transforms)
-    
+
     def __len__(self):
         return len(self.df)
-    
+
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
-        img_path = os.path.join(self.bids_root, row['filename'])
+        img_path = os.path.join(self.bids_root, row["filename"])
         label = int(row[self.task_name])
-        
+
         data = {"img": img_path, "label": label}
         data = self.transforms(data)
-        
+
         return {
             "img": data["img"],
             "label": torch.tensor(label, dtype=torch.long),
-            "filename": row['filename']
+            "filename": row["filename"],
         }
 
 
-def get_dataloaders(csv_path, bids_root, split_pkl, task_name, batch_size=8, num_workers=2):
+def get_dataloaders(
+    csv_path, bids_root, split_pkl, task_name, batch_size=8, num_workers=2
+):
     """Get train and val dataloaders"""
-    train_dataset = Task1aDataset(csv_path, bids_root, split_pkl, 'train', task_name, 'train')
-    val_dataset = Task1aDataset(csv_path, bids_root, split_pkl, 'val', task_name, 'val')
-    
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
-    
+    train_dataset = Task1aDataset(
+        csv_path, bids_root, split_pkl, "train", task_name, "train"
+    )
+    val_dataset = Task1aDataset(csv_path, bids_root, split_pkl, "val", task_name, "val")
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=True,
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True,
+    )
+
     return train_loader, val_loader, len(train_dataset), len(val_dataset)
 
 
 # ─── RUN_0002 – Multi-label ──────────────────────────────────────────────────
 
-TASK_NAMES = ['Noise', 'Zipper', 'Positioning', 'Banding', 'Motion', 'Contrast', 'Distortion']
+TASK_NAMES = [
+    "Noise",
+    "Zipper",
+    "Positioning",
+    "Banding",
+    "Motion",
+    "Contrast",
+    "Distortion",
+]
 
 
 class Task1aMultiLabelDataset(Dataset):
@@ -115,10 +173,14 @@ class Task1aMultiLabelDataset(Dataset):
 
         self.df = pd.read_csv(csv_path)
 
-        with open(split_pkl, 'rb') as f:
+        with open(split_pkl, "rb") as f:
             split = pickle.load(f)
 
-        indices = split.get('train_indices', []) if fold == 'train' else split.get('val_indices', [])
+        indices = (
+            split.get("train_indices", [])
+            if fold == "train"
+            else split.get("val_indices", [])
+        )
         self.df = self.df.iloc[indices].reset_index(drop=True)
 
         self.transforms = self._build_transforms(stage)
@@ -133,12 +195,27 @@ class Task1aMultiLabelDataset(Dataset):
         ]
 
         if stage == "train":
-            base_transforms.extend([
-                RandRotated(keys=["img"], prob=0.2, range_x=np.deg2rad(15), range_y=np.deg2rad(15), range_z=np.deg2rad(10), mode="bilinear"),
-                RandAffined(keys=["img"], prob=0.2, scale_range=(0.05, 0.05, 0.05), translate_range=(3, 3, 2), mode="bilinear"),
-                RandShiftIntensityd(keys=["img"], prob=0.2, offsets=0.1),
-                RandAdjustContrastd(keys=["img"], prob=0.2, gamma=(0.8, 1.2)),
-            ])
+            base_transforms.extend(
+                [
+                    RandRotated(
+                        keys=["img"],
+                        prob=0.2,
+                        range_x=np.deg2rad(15),
+                        range_y=np.deg2rad(15),
+                        range_z=np.deg2rad(10),
+                        mode="bilinear",
+                    ),
+                    RandAffined(
+                        keys=["img"],
+                        prob=0.2,
+                        scale_range=(0.05, 0.05, 0.05),
+                        translate_range=(3, 3, 2),
+                        mode="bilinear",
+                    ),
+                    RandShiftIntensityd(keys=["img"], prob=0.2, offsets=0.1),
+                    RandAdjustContrastd(keys=["img"], prob=0.2, gamma=(0.8, 1.2)),
+                ]
+            )
 
         base_transforms.append(ToTensord(keys=["img"]))
         return Compose(base_transforms)
@@ -148,32 +225,51 @@ class Task1aMultiLabelDataset(Dataset):
 
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
-        img_path = os.path.join(self.bids_root, row['filename'])
-        labels = torch.tensor([int(row[t]) for t in TASK_NAMES], dtype=torch.long)  # [7]
+        img_path = os.path.join(self.bids_root, row["filename"])
+        labels = torch.tensor(
+            [int(row[t]) for t in TASK_NAMES], dtype=torch.long
+        )  # [7]
 
         data = self.transforms({"img": img_path})
 
         return {
             "img": data["img"],
             "labels": labels,
-            "filename": row['filename'],
+            "filename": row["filename"],
         }
 
 
-def get_multilabel_dataloaders(csv_path, bids_root, split_pkl, batch_size=8, num_workers=2):
+def get_multilabel_dataloaders(
+    csv_path, bids_root, split_pkl, batch_size=8, num_workers=2
+):
     """Get train and val dataloaders for multi-label Task 1a (RUN_0002+)."""
-    train_ds = Task1aMultiLabelDataset(csv_path, bids_root, split_pkl, 'train', 'train')
-    val_ds = Task1aMultiLabelDataset(csv_path, bids_root, split_pkl, 'val', 'val')
+    train_ds = Task1aMultiLabelDataset(csv_path, bids_root, split_pkl, "train", "train")
+    val_ds = Task1aMultiLabelDataset(csv_path, bids_root, split_pkl, "val", "val")
 
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True)
-    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=True,
+    )
+    val_loader = DataLoader(
+        val_ds,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True,
+    )
 
     return train_loader, val_loader, len(train_ds), len(val_ds)
 
 
 # ─── RUN_0003 – Task 2 Multi-structure Segmentation ─────────────────────────
 
-def build_task2_records(data_root, image_suffix="_ciso.nii.gz", label_suffix="_LF_seg.nii.gz"):
+
+def build_task2_records(
+    data_root, image_suffix="_ciso.nii.gz", label_suffix="_LF_seg.nii.gz"
+):
     """Build Task 2 image/label pairs from LISA naming convention.
 
     Returns a list of dict records with keys: subject, img, label.
@@ -209,14 +305,20 @@ class Task2SegmentationDataset(Dataset):
         image_suffix="_ciso.nii.gz",
         label_suffix="_LF_seg.nii.gz",
         patch_size=(128, 128, 128),
-        num_samples_per_volume=2,
+        num_samples_per_volume=1,
+        num_classes=12,
+        collapse_labels=False,
     ):
         self.stage = stage
         self.fold = fold
         self.patch_size = tuple(patch_size)
         self.num_samples_per_volume = int(num_samples_per_volume)
+        self.num_classes = int(num_classes)
+        self.collapse_labels = bool(collapse_labels)
 
-        records = build_task2_records(data_root, image_suffix=image_suffix, label_suffix=label_suffix)
+        records = build_task2_records(
+            data_root, image_suffix=image_suffix, label_suffix=label_suffix
+        )
         records_df = pd.DataFrame(records)
 
         with open(split_pkl, "rb") as f:
@@ -227,7 +329,9 @@ class Task2SegmentationDataset(Dataset):
         else:
             keep_subjects = set(split.get("val_subjects", []))
 
-        self.records = records_df[records_df["subject"].isin(keep_subjects)].to_dict("records")
+        self.records = records_df[records_df["subject"].isin(keep_subjects)].to_dict(
+            "records"
+        )
         self.transforms = self._build_transforms(stage)
 
     def _build_transforms(self, stage):
@@ -239,28 +343,54 @@ class Task2SegmentationDataset(Dataset):
         ]
 
         if stage == "train":
-            base.extend([
-                SpatialPadd(keys=["img", "label"], spatial_size=self.patch_size, mode=("constant", "constant")),
-                RandCropByPosNegLabeld(
-                    keys=["img", "label"],
-                    label_key="label",
-                    spatial_size=self.patch_size,
-                    pos=1,
-                    neg=1,
-                    num_samples=self.num_samples_per_volume,
-                    image_key="img",
-                    image_threshold=0,
-                ),
-                RandFlipd(keys=["img", "label"], prob=0.5, spatial_axis=0),
-                RandFlipd(keys=["img", "label"], prob=0.5, spatial_axis=1),
-                RandFlipd(keys=["img", "label"], prob=0.5, spatial_axis=2),
-                RandGaussianNoised(keys=["img"], prob=0.15, mean=0.0, std=0.01),
-                RandScaleIntensityd(keys=["img"], factors=0.1, prob=0.2),
-            ])
+            base.extend(
+                [
+                    SpatialPadd(
+                        keys=["img", "label"],
+                        spatial_size=self.patch_size,
+                        mode=("constant", "constant"),
+                    ),
+                    RandCropByLabelClassesd(
+                        keys=["img", "label"],
+                        label_key="label",
+                        spatial_size=self.patch_size,
+                        num_classes=self.num_classes,
+                        ratios=[0.25] + [1.0] * (self.num_classes - 1),
+                        num_samples=self.num_samples_per_volume,
+                    ),
+                    RandAffined(
+                        keys=["img", "label"],
+                        prob=0.25,
+                        rotate_range=(np.deg2rad(20), np.deg2rad(20), np.deg2rad(20)),
+                        scale_range=(0.15, 0.15, 0.15),
+                        translate_range=(8, 8, 8),
+                        mode=("bilinear", "nearest"),
+                    ),
+                    RandFlipd(keys=["img", "label"], prob=0.5, spatial_axis=0),
+                    RandFlipd(keys=["img", "label"], prob=0.5, spatial_axis=1),
+                    RandFlipd(keys=["img", "label"], prob=0.5, spatial_axis=2),
+                    RandGaussianNoised(keys=["img"], prob=0.15, mean=0.0, std=0.01),
+                    RandScaleIntensityd(keys=["img"], factors=0.1, prob=0.2),
+                    RandAdjustContrastd(keys=["img"], prob=0.2, gamma=(0.7, 1.5)),
+                    RandGaussianSmoothd(
+                        keys=["img"],
+                        prob=0.15,
+                        sigma_x=(0.5, 1.0),
+                        sigma_y=(0.5, 1.0),
+                        sigma_z=(0.5, 1.0),
+                    ),
+                ]
+            )
         else:
-            base.extend([
-                SpatialPadd(keys=["img", "label"], spatial_size=self.patch_size, mode=("constant", "constant")),
-            ])
+            base.extend(
+                [
+                    SpatialPadd(
+                        keys=["img", "label"],
+                        spatial_size=self.patch_size,
+                        mode=("constant", "constant"),
+                    ),
+                ]
+            )
 
         return Compose(base)
 
@@ -279,6 +409,17 @@ class Task2SegmentationDataset(Dataset):
         if label.shape[0] != 1:
             label = label[:1]
 
+        if self.collapse_labels:
+            from src.collapsed_labels import COLLAPSED_MAP
+
+            # Build lookup tensor: index=original_label, value=collapsed_label
+            lookup = torch.tensor(
+                [COLLAPSED_MAP.get(i, i) for i in range(12)],
+                dtype=label.dtype,
+                device=label.device,
+            )
+            label = lookup[label]
+
         return {
             "img": data["img"].float(),
             "label": label,
@@ -296,7 +437,9 @@ def get_task2_seg_dataloaders(
     image_suffix="_ciso.nii.gz",
     label_suffix="_LF_seg.nii.gz",
     patch_size=(128, 128, 128),
-    num_samples_per_volume=2,
+    num_samples_per_volume=1,
+    num_classes=12,
+    collapse_labels=False,
 ):
     """Get train/val dataloaders for Task 2 segmentation (RUN_0003)."""
     train_ds = Task2SegmentationDataset(
@@ -308,6 +451,8 @@ def get_task2_seg_dataloaders(
         label_suffix=label_suffix,
         patch_size=patch_size,
         num_samples_per_volume=num_samples_per_volume,
+        num_classes=num_classes,
+        collapse_labels=collapse_labels,
     )
     val_ds = Task2SegmentationDataset(
         data_root=data_root,
@@ -318,6 +463,204 @@ def get_task2_seg_dataloaders(
         label_suffix=label_suffix,
         patch_size=patch_size,
         num_samples_per_volume=1,
+        num_classes=num_classes,
+        collapse_labels=collapse_labels,
+    )
+
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=True,
+    )
+    val_loader = DataLoader(
+        val_ds,
+        batch_size=1,
+        shuffle=False,
+        num_workers=max(1, num_workers // 2),
+        pin_memory=True,
+    )
+
+    return train_loader, val_loader, len(train_ds), len(val_ds)
+
+
+# ─── RUN_0004 – Task 1b Self-supervised Denoising ────────────────────────────
+
+
+def build_task1b_records(data_root: str, image_suffix: str = "_ciso.nii.gz") -> list:
+    """Scan *data_root* for volumes matching *image_suffix* and return a record list.
+
+    Returns:
+        List of dicts with keys: ``subject`` (str), ``img_path`` (str).
+    """
+    records = []
+    for filename in sorted(os.listdir(data_root)):
+        if not filename.endswith(image_suffix):
+            continue
+        match = re.match(r"(LISA_\d+)", filename)
+        if match is None:
+            continue
+        subject = match.group(1)
+        records.append(
+            {"subject": subject, "img_path": os.path.join(data_root, filename)}
+        )
+    return records
+
+
+def _subjects_from_split(split: dict, all_subjects: list, fold: str) -> set:
+    """Extract the subject set for a given fold from any supported split format.
+
+    Supported formats:
+      * ``{train_subjects, val_subjects}`` – Task2-style subject-level split.
+      * ``{train_indices, val_indices}``   – Task1a-style CSV-index split.  Since
+        these indices refer to an external CSV we cannot re-map them here; the
+        train/val fraction is used to derive an equivalent subject partition.
+    """
+    if "train_subjects" in split:
+        key = "train_subjects" if fold == "train" else "val_subjects"
+        return set(split[key])
+
+    if "train_indices" in split:
+        # Approximate split by replicating the train fraction on the sorted
+        # subject list so the ratio is preserved across tasks.
+        n_total_samples = split.get("n_samples", len(all_subjects))
+        n_train_samples = len(split["train_indices"])
+        fraction = n_train_samples / max(1, n_total_samples)
+        n_train_subjects = max(1, round(fraction * len(all_subjects)))
+        if fold == "train":
+            return set(all_subjects[:n_train_subjects])
+        return set(all_subjects[n_train_subjects:])
+
+    # Unknown format – default to 80/20
+    n_train = max(1, int(0.8 * len(all_subjects)))
+    if fold == "train":
+        return set(all_subjects[:n_train])
+    return set(all_subjects[n_train:])
+
+
+class Task1bDataset(Dataset):
+    """Task 1b dataset: self-supervised denoising (RUN_0004).
+
+    For each sample the dataset returns the preprocessed *clean* volume.
+    Synthetic degradation is applied externally by the trainer so that noise
+    parameters can vary epoch by epoch.
+
+    The train/val split reuses ``task2_fixed.pkl`` (``train_subjects``/
+    ``val_subjects``) or ``task1a_fixed.pkl`` (``train_indices``/``val_indices``)
+    if the referenced file is available.  Otherwise a deterministic
+    ``GroupShuffleSplit`` is created from the filesystem records.
+
+    Args:
+        data_root:    Directory containing ``*_ciso.nii.gz`` volumes.
+        split_pkl:    Path to the patient-level split pickle.  Both subject-level
+                      (Task2 format) and index-level (Task1a format) pickles are
+                      supported.
+        fold:         ``"train"`` or ``"val"``.
+        stage:        ``"train"`` or ``"val"`` (reserved for future augmentations).
+        image_suffix: Filename suffix to match (default ``"_ciso.nii.gz"``).
+        spatial_size: 3-tuple for centre-crop / spatial-pad target size.
+    """
+
+    def __init__(
+        self,
+        data_root: str,
+        split_pkl: str,
+        fold: str = "train",
+        stage: str = "train",
+        image_suffix: str = "_ciso.nii.gz",
+        spatial_size: tuple = (96, 96, 96),
+    ):
+        self.stage = stage
+        self.fold = fold
+        self.spatial_size = tuple(spatial_size)
+
+        records = build_task1b_records(data_root, image_suffix=image_suffix)
+        if not records:
+            raise RuntimeError(
+                f"No '{image_suffix}' volumes found in {data_root}. "
+                "Check data_root and image_suffix in the config."
+            )
+
+        records_df = pd.DataFrame(records)
+        all_subjects = sorted(records_df["subject"].unique().tolist())
+
+        if os.path.exists(split_pkl):
+            with open(split_pkl, "rb") as f:
+                split = pickle.load(f)
+            keep = _subjects_from_split(split, all_subjects, fold)
+        else:
+            # No split file – create a deterministic patient-level split on-the-fly.
+            from sklearn.model_selection import GroupShuffleSplit as _GSS
+
+            gss = _GSS(n_splits=1, test_size=0.2, random_state=42)
+            groups = records_df["subject"].values
+            train_idx, val_idx = next(gss.split(records_df, groups=groups))
+            if fold == "train":
+                keep = set(records_df.iloc[train_idx]["subject"].unique())
+            else:
+                keep = set(records_df.iloc[val_idx]["subject"].unique())
+
+        self.records = records_df[records_df["subject"].isin(keep)].to_dict("records")
+
+        if not self.records:
+            raise RuntimeError(
+                f"Task1bDataset ({fold}): no volumes remain after applying split. "
+                f"Subjects found: {all_subjects[:5]} ... "
+                f"Subjects requested: {sorted(keep)[:5]} ..."
+            )
+
+        self.transforms = self._build_transforms(stage)
+
+    def _build_transforms(self, stage: str):
+        base = [
+            LoadImaged(keys=["img"], reader="nibabelreader"),
+            EnsureChannelFirstd(keys=["img"]),
+            NormalizeIntensityd(keys=["img"], nonzero=False, channel_wise=True),
+            CenterSpatialCropd(keys=["img"], roi_size=self.spatial_size),
+            SpatialPadd(keys=["img"], spatial_size=self.spatial_size, mode="symmetric"),
+            EnsureTyped(keys=["img"]),
+        ]
+        # Stage-specific augmentations can be inserted here in future runs.
+        return Compose(base)
+
+    def __len__(self) -> int:
+        return len(self.records)
+
+    def __getitem__(self, idx: int) -> dict:
+        row = self.records[idx]
+        data = self.transforms({"img": row["img_path"]})
+        return {
+            "img": data["img"].float(),
+            "subject": row["subject"],
+            "img_path": row["img_path"],
+        }
+
+
+def get_task1b_dataloaders(
+    data_root: str,
+    split_pkl: str,
+    batch_size: int = 2,
+    num_workers: int = 4,
+    image_suffix: str = "_ciso.nii.gz",
+    spatial_size: tuple = (96, 96, 96),
+):
+    """Return (train_loader, val_loader, n_train, n_val) for Task 1b (RUN_0004)."""
+    train_ds = Task1bDataset(
+        data_root=data_root,
+        split_pkl=split_pkl,
+        fold="train",
+        stage="train",
+        image_suffix=image_suffix,
+        spatial_size=spatial_size,
+    )
+    val_ds = Task1bDataset(
+        data_root=data_root,
+        split_pkl=split_pkl,
+        fold="val",
+        stage="val",
+        image_suffix=image_suffix,
+        spatial_size=spatial_size,
     )
 
     train_loader = DataLoader(
