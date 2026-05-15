@@ -84,16 +84,15 @@ See `implementation_plan.md`.
 
 ## Results Summary
 
-Metrics computed on validation split (12 subjects, 11 non-background classes).
-**Best 12-class result in this experimental cycle.**
+Metrics computed on validation split (12 subjects, 11 non-background classes). **Re-trained on 2026-05-15** (original checkpoint lost — early stop at epoch 19 vs original epoch 28). Different local minimum reached (DSC 0.353 vs 0.631).
 
 | Metric         | Value  |
-|----------------|--------|
-| mean_dsc       | 0.6309 |
-| mean_hd95      | 9.58   |
-| mean_hd        | 17.57  |
-| mean_rve       | 0.3200 |
-| mean_assd      | 2.22   |
+|------|--|--|---|
+| mean_dsc       | 0.3527 |
+| mean_hd95      | 23.96  |
+| mean_hd        | 28.05  |
+| mean_rve       | 0.4686 |
+| mean_assd      | 6.92   |
 | n_subjects     | 12     |
 | n_classes_eval | 11     |
 

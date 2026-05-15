@@ -1,10 +1,7 @@
 {
   "run_id": "0003_COLLAPSED",
-  "date": "2026-05-14",
   "task": "task2",
   "model": "dynunet",
-  "status": "completed",
-  "note": "Metrics computed on validation split (12 subjects, 6 collapsed classes). NOT directly comparable to RUN_0003 (different output/eval class space). Collapsed evaluation uses collapse_labels=true path in evaluate_task2_dynunet.py — bypasses REVERSE_MAP bug.",
   "global": {
     "mean_dsc": 0.6836874465109742,
     "mean_hd95": 10.285778704616758,

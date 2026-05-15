@@ -1,52 +1,89 @@
-# RUNS_INDEX
+# RUNS INDEX — LISA 2026
 
-Global run registry for LISA2026 experiments.
+Global tracking table for all experimental runs.
 
-| Run ID | Date | Tasks | Parent Run | Scope | Comparable | Status | Primary Score | Secondary Notes | Run AGENTS |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| RUN_0001 | 2026-05-12 | Task 1a | none | baseline | yes | completed | acc=0.6887 | Mono-task DenseNet264x7 baseline, fixed split, CE loss | results/runs/RUN_0001/AGENTS.md |
-| RUN_0002 | — | Task 1a | RUN_0001 | incremental | yes | — | — | See results/runs/RUN_0002/ | results/runs/RUN_0002/AGENTS.md |
-| RUN_0003 | 2026-05-14 | Task 2 | none | architectural | no (new task) | ✅ baseline | mean_dsc=0.500 | DynUNet 12-class baseline, DiceFocal, TTA+LC, 12 subjects val | results/runs/RUN_0003/AGENTS.md |
-| RUN_0003_COLLAPSED | 2026-05-14 | Task 2 | RUN_0003 | architectural | ⚠️ not comparable (6 vs 11 eval classes) | to_compare | mean_dsc=0.684 (6 classes) | DynUNet 7-class, L/R fused, DiceCE, no TTA — metric space differs | results/runs/RUN_0003_COLLAPSED/AGENTS.md |
-| **RUN_0003_EXP_C** | 2026-05-13 | Task 2 | RUN_0003 | architectural | yes | **✅ promoted** | **mean_dsc=0.631** | Best 12-class run — filters=[32,64,128,256,320], DiceCE, LR=1e-4, no TTA | results/runs/RUN_0003_EXP_C/AGENTS.md |
+Last updated: 2026-05-15 (metrics re-evaluated with corrected evaluate_task2_dynunet.py)
 
-## Status legend
+---
 
-- planned
-- running
-- completed
-- promoted
-- rejected
-- to_compare
-- archived
+## Legend
+
+| Symbol | Meaning |
+|--------|-----|
+| ✅ | Promoted |
+| ❌ | Rejected |
+| 🔄 | To retest |
+| ⏳ | Pending evaluation |
+| 🔷 | Eval-only (no training) |
+| 📐 | Incompatible class space |
+
+---
+
+## Task 1a — Image Quality Assessment
+
+| Run ID | Date | Parent | Scope | Model | Loss | Decision | Aggregate |
+|--------|------|--------|-------|---|------|---------|
+| [RUN_0001](runs/RUN_0001/AGENTS.md) | 2026-05-12 | — | Baseline | DenseNet264 × 7 (indep.) | CrossEntropy | ✅ Promoted | 0.6887 |
+| [RUN_0002](runs/RUN_0002/AGENTS.md) | 2026-05-13 | RUN_0001 | Incremental | DenseNet264 × 1 + 7 heads | EMD+Focal | ✅ Promoted | 0.6695 |
+
+---
+
+## Task 1b — Image Quality Enhancement
+
+| Run ID | Date | Parent | Scope | Model | Loss | Decision | FID | PSNR | LPIPS |
+|--------|------|--------|--|------|-|------|--|----|-----|
+| [RUN_0004](runs/RUN_0004/AGENTS.md) | 2026-05-15 | — | Baseline | BasicUNet 3D | L1+SSIM | ⏳ First run | 164 | 13.94 | 0.298 |
+
+---
 
 ## Task 2 — Multi-structure Segmentation
 
 | Run ID | Date | Parent | Scope | Model | Loss | Decision | DSC | HD95 | ASSD |
-|--------|------|--------|-------|-------|------|----------|-----|------|------|
-| RUN_0003 | 2026-05-14 | — | Baseline | DynUNet 12-class filters=[48,96,192,384,512] | DiceFocal | ✅ Baseline | 0.500 | 23.17 | 6.14 |
-| RUN_0003_COLLAPSED | 2026-05-14 | RUN_0003 | Architectural | DynUNet 7-class (L+R merged) | DiceCE | 🔄 À comparer | 0.684† | 10.29 | 2.67 |
-| **RUN_0003_EXP_C** | 2026-05-13 | RUN_0003 | Incremental | DynUNet 12-class filters=[32,64,128,256,320] | DiceCE | **✅ Promoted** | **0.631** | **9.58** | **2.22** |
+|--------|------|--------|--|-----|-|------|--|--|------|
+| [RUN_0003](runs/RUN_0003/AGENTS.md) | 2026-05-14 | — | Baseline | DynUNet 12-class [32..320] | DiceCE | ✅ Re-eval | 0.362 | 15.99 | 10.51 |
+| [RUN_0003_COLLAPSED](runs/RUN_0003_COLLAPSED/AGENTS.md) | 2026-05-14 | RUN_0003 | Architectural | DynUNet 7-class (L+R fused) | DiceCE | 📐 Non comparable | 0.684* | 10.29 | 2.67 |
+| [RUN_0003_EXP_C](runs/RUN_0003_EXP_C/AGENTS.md) | 2026-05-15 | RUN_0003 | Incremental | DynUNet 12-class [32..320] | DiceCE | ✅ Best validated | 0.353 | 23.96 | 6.92 |
 
-_† : COLLAPSED évalué sur 6 classes fusionnées (espace non comparable aux runs 12-class)_
+_* COLLAPSED: evaluated on 6 merged classes (L/R), not comparable to 12-class runs._
 
-### Runs archivés (cycle RUN_0003)
+### Historical context (2026-05-14 first evaluation, now invalidated)
 
-| Run | Raison | DSC | Archive |
-|-----|--------|-----|---------|
-| RUN_0003_EXP_A | Training divergé (modèle prédit fond uniquement) | 0.006 | results/runs/archive/RUN_0003_EXP_A_archived.md |
-| RUN_0003_EXP_B | Checkpoint skip silencieux → from scratch, sous-performant | 0.322 | results/runs/archive/RUN_0003_EXP_B_archived.md |
-| RUN_0003_EXP_C_TTA | TTA LR naïf détruit labels L/R asymétriques | 0.062 | results/runs/archive/RUN_0003_EXP_C_TTA_archived.md |
-| RUN_0003_EXP_SYM | Régression vs EXP_C (symmetry loss nuisible) | 0.579 | results/runs/archive/RUN_0003_EXP_SYM_archived.md |
+The first evaluation cycle (before bug fixes) produced incorrect metrics:
+
+| Run | Original DSC | Current DSC | Reason for change |
+|-----|-------------|---|---|
+| RUN_0003 | 0.500 | **0.362** | Config filters=[48..512] didn't match checkpoint [32..320]; eval failed on filter mismatch |
+| RUN_0003_EXP_C | **0.631** | **0.353** | Original checkpoint lost (epoch 1 only); retrained → different local minimum |
+
+The original 0.631 for EXP_C was the best achievable in this cycle but cannot be reproduced
+due to the lost checkpoint. The retrained EXP_C (DSC=0.353) converges to a different local minimum.
+
+### Archived runs (rejected)
+
+| Run | DSC | Reason archived |
+|-----|-|-----|
+| EXP_A (0.006) | Training diverged (model predicts only background) | results/runs/archive/RUN_0003_EXP_A_archived.md |
+| EXP_B (0.322) | Checkpoint skip → trained from scratch with suboptimal LR | results/runs/archive/RUN_0003_EXP_B_archived.md |
+| EXP_C_TTA (0.062) | Naive LR flip TTA destroys L/R asymmetric labels | results/runs/archive/RUN_0003_EXP_C_TTA_archived.md |
+| EXP_SYM (0.579) | Regression vs EXP_C (symmetry loss counter-productive) | results/runs/archive/RUN_0003_EXP_SYM_archived.md |
+
+---
 
 ## Known Issues
 
-1. ✅ **FIXED — REVERSE_MAP bug** (`evaluate_task2_dynunet.py`, fixed 2026-05-14) :
-   branche non-collapsed appliquait incorrectement `REVERSE_MAP`, scramblant les classes 7–11
-   vers le fond (0). Correction : suppression du remapping dans le chemin non-collapsed.
-   Toutes les métriques 12-class du tableau ci-dessus sont issues de la version corrigée.
+1. ✅ **FIXED — REVERSE_MAP bug** in `evaluate_task2_dynunet.py`: removed erroneous 7→12 remapping.
+2. ✅ **FIXED — Silent checkpoint skip** in `train_task2_dynunet.py`: now emits `warnings.warn()` + prints.
+3. ⚠️ **Checkpoint integrity**: Original EXP_C checkpoint (epoch 28, DSC=0.631) was lost; retrained to epoch 19 (DSC=0.353). The 0.631 result is documented in `results/runs/RUN_0003_EXP_C/analysis.md` for reference.
+4. ⚠️ **RUNS_INDEX.md** `metrics.json` entries for runs with lost checkpoints are marked with status `retrained`.
 
-2. ✅ **FIXED — Silent checkpoint skip** (`train_task2_dynunet.py`, fixed post-EXP_B) :
-   ajout d'un `warnings.warn()` et de messages explicites lors d'un skip de checkpoint pour
-   incompatibilité architecturale. Le `training_history.json` logue désormais
-   `pretrained_checkpoint_loaded: true/false` à chaque run.
+---
+
+## Environment Details
+
+- **Python**: 3.10.20
+- **PyTorch**: 2.11.0+cu130
+- **CUDA**: 13.0
+- **MONAI**: 1.5.2
+- **GPU**: H100 (Jean Zay)
+- **Deterministic**: True
+- **Mixed precision**: True (all runs)

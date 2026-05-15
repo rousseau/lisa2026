@@ -1,13 +1,12 @@
 {
   "run_id": "0004",
-  "date": "2026-05-15",
   "task": "task1b",
   "model": "basicunet_3d",
-  "status": "not_run",
-  "note": "First Task 1b run. Self-supervised denoising baseline. Not yet executed.",
+  "noise_std_eval": 0.125,
+  "n_subjects_eval": 11,
   "global": {
-    "fid": null,
-    "psnr": null,
-    "lpips": null
+    "fid": 164.24554266305958,
+    "psnr": 13.94189453125,
+    "lpips": 0.2980709063735875
   }
 }

@@ -15,7 +15,7 @@ data:
   label_suffix: "_LF_seg.nii.gz"
   patch_size: [128, 128, 128]
   val_roi_size: [128, 128, 128]
-  train_num_samples: 2
+  train_num_samples: 1
 
 model:
   in_channels: 1
@@ -44,12 +44,16 @@ model:
 training:
   batch_size: 1
   num_workers: 4
-  num_epochs: 180
+  num_epochs: 120
   learning_rate: 2.0e-4
+  min_learning_rate: 1.0e-6
   weight_decay: 1.0e-5
+  pretrained_checkpoint: "outputs/checkpoints/RUN_0003/task2_dynunet_best.pt"
   loss:
+    type: "dice_focal"
     lambda_dice: 1.0
-    lambda_ce: 1.0
+    lambda_focal: 1.0
+    focal_gamma: 2.0
 
 early_stopping:
   patience: 25
@@ -57,6 +61,11 @@ early_stopping:
 inference:
   sw_batch_size: 1
   overlap: 0.5
+  tta_flip_axes:
+    - [2]
+    - [3]
+    - [4]
+  keep_largest_component: true
 
 environment:
   seed: 42
