@@ -679,3 +679,346 @@ def get_task1b_dataloaders(
     )
 
     return train_loader, val_loader, len(train_ds), len(val_ds)
+
+
+# ─── RUN_0004 – Multi-task datasets ──────────────────────────────────────────────
+
+
+def build_clean_subject_set(csv_path: str) -> set:
+    """Return subject IDs where ALL 7 artifact scores equal 0.
+
+    Parses the Task 1a CSV and extracts the LISA_XXXX identifier from
+    the ``filename`` column using the same regex as Task 2.
+
+    Returns an empty set if the CSV cannot be read or has no clean rows.
+    """
+    try:
+        df = pd.read_csv(csv_path)
+        artifact_cols = [c for c in TASK_NAMES if c in df.columns]
+        if not artifact_cols:
+            return set()
+        clean_mask = (df[artifact_cols] == 0).all(axis=1)
+        subjects: set = set()
+        for fn in df.loc[clean_mask, "filename"]:
+            m = re.match(r"(LISA_\d+)", str(fn))
+            if m:
+                subjects.add(m.group(1))
+        return subjects
+    except Exception:
+        return set()
+
+
+class Task1aMultiTask128Dataset(Dataset):
+    """Task 1a multi-label dataset resized to 128³ for the shared encoder (RUN_0004).
+
+    Identical to Task1aMultiLabelDataset but with configurable spatial_size
+    (default 128³ instead of 150³).  Returns ``labels`` as [7] int64 tensor
+    plus ``img`` as [1, 128, 128, 128] float32 tensor.
+    """
+
+    def __init__(
+        self,
+        csv_path: str,
+        bids_root: str,
+        split_pkl: str,
+        fold: str,
+        stage: str = "train",
+        spatial_size: tuple = (128, 128, 128),
+    ):
+        self.bids_root = bids_root
+        self.fold = fold
+        self.stage = stage
+        self.spatial_size = tuple(spatial_size)
+
+        self.df = pd.read_csv(csv_path)
+
+        with open(split_pkl, "rb") as fh:
+            split = pickle.load(fh)
+
+        indices = (
+            split.get("train_indices", [])
+            if fold == "train"
+            else split.get("val_indices", [])
+        )
+        self.df = self.df.iloc[indices].reset_index(drop=True)
+        self.transforms = self._build_transforms(stage)
+
+    def _build_transforms(self, stage: str):
+        base = [
+            LoadImaged(keys=["img"], reader="nibabelreader"),
+            EnsureChannelFirstd(keys=["img"]),
+            NormalizeIntensityd(keys=["img"], nonzero=False, channel_wise=True),
+            CenterSpatialCropd(keys=["img"], roi_size=self.spatial_size),
+            SpatialPadd(keys=["img"], spatial_size=self.spatial_size, mode="symmetric"),
+            EnsureTyped(keys=["img"]),
+        ]
+        if stage == "train":
+            base.extend(
+                [
+                    RandRotated(
+                        keys=["img"],
+                        prob=0.2,
+                        range_x=np.deg2rad(15),
+                        range_y=np.deg2rad(15),
+                        range_z=np.deg2rad(10),
+                        mode="bilinear",
+                    ),
+                    RandAffined(
+                        keys=["img"],
+                        prob=0.2,
+                        scale_range=(0.05, 0.05, 0.05),
+                        translate_range=(3, 3, 2),
+                        mode="bilinear",
+                    ),
+                    RandShiftIntensityd(keys=["img"], prob=0.2, offsets=0.1),
+                    RandAdjustContrastd(keys=["img"], prob=0.2, gamma=(0.8, 1.2)),
+                ]
+            )
+        return Compose(base)
+
+    def __len__(self) -> int:
+        return len(self.df)
+
+    def __getitem__(self, idx: int) -> dict:
+        row = self.df.iloc[idx]
+        img_path = os.path.join(self.bids_root, row["filename"])
+        labels = torch.tensor([int(row[t]) for t in TASK_NAMES], dtype=torch.long)
+        data = self.transforms({"img": img_path})
+        return {
+            "img": data["img"].float(),
+            "labels": labels,
+            "filename": row["filename"],
+        }
+
+
+class CleanImageDataset(Dataset):
+    """Volumes with all artifact scores = 0, at 128³ (Task 1b autoencoder, RUN_0004).
+
+    Scans *data_root* for ``*_ciso.nii.gz`` files and keeps only subjects
+    whose LISA_XXXX ID appears in *clean_subjects*.  If *clean_subjects* is
+    empty or None, ALL subjects are used (fallback for datasets without labels).
+
+    Each sample returns:
+        ``img``     : [1, 128, 128, 128] float32 – normalised clean volume
+        ``subject`` : str
+    The reconstruction target is the same as the input (identity mapping).
+    """
+
+    def __init__(
+        self,
+        data_root: str,
+        split_pkl: str,
+        fold: str,
+        stage: str = "train",
+        image_suffix: str = "_ciso.nii.gz",
+        spatial_size: tuple = (128, 128, 128),
+        clean_subjects: set = None,
+    ):
+        self.spatial_size = tuple(spatial_size)
+        self.stage = stage
+
+        records = build_task1b_records(data_root, image_suffix=image_suffix)
+        if not records:
+            raise RuntimeError(f"No '{image_suffix}' volumes found in {data_root}.")
+
+        records_df = pd.DataFrame(records)
+        all_subjects = sorted(records_df["subject"].unique().tolist())
+
+        # Apply task split
+        if os.path.exists(split_pkl):
+            with open(split_pkl, "rb") as fh:
+                split = pickle.load(fh)
+            fold_subjects = _subjects_from_split(split, all_subjects, fold)
+        else:
+            n_train = max(1, int(0.8 * len(all_subjects)))
+            fold_subjects = (
+                set(all_subjects[:n_train])
+                if fold == "train"
+                else set(all_subjects[n_train:])
+            )
+
+        # Filter to clean subjects (if provided)
+        if clean_subjects:
+            fold_subjects = fold_subjects & clean_subjects
+            if not fold_subjects:
+                import warnings
+
+                warnings.warn(
+                    f"CleanImageDataset ({fold}): no clean subjects found after "
+                    "intersecting split with clean_subjects. Using all split subjects "
+                    "as fallback (autoencoder will not be restricted to clean images)."
+                )
+                fold_subjects = _subjects_from_split(
+                    split if os.path.exists(split_pkl) else {}, all_subjects, fold
+                )
+
+        self.records = records_df[records_df["subject"].isin(fold_subjects)].to_dict(
+            "records"
+        )
+
+        if not self.records:
+            raise RuntimeError(
+                f"CleanImageDataset ({fold}): no volumes remain after filtering."
+            )
+
+        self.transforms = self._build_transforms(stage)
+
+    def _build_transforms(self, stage: str):
+        return Compose(
+            [
+                LoadImaged(keys=["img"], reader="nibabelreader"),
+                EnsureChannelFirstd(keys=["img"]),
+                NormalizeIntensityd(keys=["img"], nonzero=False, channel_wise=True),
+                CenterSpatialCropd(keys=["img"], roi_size=self.spatial_size),
+                SpatialPadd(
+                    keys=["img"], spatial_size=self.spatial_size, mode="symmetric"
+                ),
+                EnsureTyped(keys=["img"]),
+            ]
+        )
+
+    def __len__(self) -> int:
+        return len(self.records)
+
+    def __getitem__(self, idx: int) -> dict:
+        row = self.records[idx]
+        data = self.transforms({"img": row["img_path"]})
+        return {
+            "img": data["img"].float(),
+            "subject": row["subject"],
+        }
+
+
+def get_multitask_dataloaders(config: dict) -> dict:
+    """Return dataloaders for all three tasks used in RUN_0004.
+
+    Returns a dict::
+
+        {
+          "1a": (train_loader, val_loader, n_train, n_val),
+          "1b": (train_loader, val_loader, n_train, n_val),
+          "2":  (train_loader, val_loader, n_train, n_val),
+        }
+
+    Config keys expected under ``data``:
+        data_root, csv_path (Task 1a + 1b), bids_root (Task 1a),
+        split_pkl_1a, split_pkl_2, image_suffix, label_suffix,
+        patch_size, train_num_samples.
+    Config keys expected under ``training``:
+        batch_size, num_workers.
+    """
+    data_cfg = config["data"]
+    train_cfg = config["training"]
+
+    batch_size = int(train_cfg.get("batch_size", 1))
+    num_workers = int(train_cfg.get("num_workers", 2))
+    spatial_size = tuple(int(v) for v in data_cfg.get("patch_size", [128, 128, 128]))
+
+    data_root = os.getenv("LISA_DATA_ROOT", data_cfg["data_root"])
+    bids_root = os.getenv(
+        "LISA_DATA_ROOT", data_cfg.get("bids_root", data_cfg["data_root"])
+    )
+    csv_path = os.getenv(
+        "LISA_CSV_PATH",
+        data_cfg.get("csv_path", os.path.join(data_root, "LISA_Task1a_2026.csv")),
+    )
+    split_pkl_1a = data_cfg.get("split_pkl_1a", "results/splits/task1a_fixed.pkl")
+    split_pkl_2 = data_cfg.get("split_pkl_2", "results/splits/task2_fixed.pkl")
+    image_suffix = data_cfg.get("image_suffix", "_ciso.nii.gz")
+    label_suffix = data_cfg.get("label_suffix", "_LF_seg.nii.gz")
+    num_samples = int(data_cfg.get("train_num_samples", 1))
+
+    # ── Task 1a ─────────────────────────────────────────────────────────────────
+    train_ds_1a = Task1aMultiTask128Dataset(
+        csv_path=csv_path,
+        bids_root=bids_root,
+        split_pkl=split_pkl_1a,
+        fold="train",
+        stage="train",
+        spatial_size=spatial_size,
+    )
+    val_ds_1a = Task1aMultiTask128Dataset(
+        csv_path=csv_path,
+        bids_root=bids_root,
+        split_pkl=split_pkl_1a,
+        fold="val",
+        stage="val",
+        spatial_size=spatial_size,
+    )
+
+    # ── Task 1b (clean images) ──────────────────────────────────────────────────
+    clean_subjects = build_clean_subject_set(csv_path)
+    train_ds_1b = CleanImageDataset(
+        data_root=data_root,
+        split_pkl=split_pkl_2,
+        fold="train",
+        stage="train",
+        image_suffix=image_suffix,
+        spatial_size=spatial_size,
+        clean_subjects=clean_subjects if clean_subjects else None,
+    )
+    val_ds_1b = CleanImageDataset(
+        data_root=data_root,
+        split_pkl=split_pkl_2,
+        fold="val",
+        stage="val",
+        image_suffix=image_suffix,
+        spatial_size=spatial_size,
+        clean_subjects=clean_subjects if clean_subjects else None,
+    )
+
+    # ── Task 2 ───────────────────────────────────────────────────────────────────
+    train_ds_2 = Task2SegmentationDataset(
+        data_root=data_root,
+        split_pkl=split_pkl_2,
+        fold="train",
+        stage="train",
+        image_suffix=image_suffix,
+        label_suffix=label_suffix,
+        patch_size=spatial_size,
+        num_samples_per_volume=num_samples,
+        num_classes=12,
+    )
+    val_ds_2 = Task2SegmentationDataset(
+        data_root=data_root,
+        split_pkl=split_pkl_2,
+        fold="val",
+        stage="val",
+        image_suffix=image_suffix,
+        label_suffix=label_suffix,
+        patch_size=spatial_size,
+        num_samples_per_volume=1,
+        num_classes=12,
+    )
+
+    def _make_loader(ds, shuffle, bs=batch_size):
+        return DataLoader(
+            ds, batch_size=bs, shuffle=shuffle, num_workers=num_workers, pin_memory=True
+        )
+
+    return {
+        "1a": (
+            _make_loader(train_ds_1a, True),
+            _make_loader(val_ds_1a, False),
+            len(train_ds_1a),
+            len(val_ds_1a),
+        ),
+        "1b": (
+            _make_loader(train_ds_1b, True),
+            _make_loader(val_ds_1b, False),
+            len(train_ds_1b),
+            len(val_ds_1b),
+        ),
+        "2": (
+            _make_loader(train_ds_2, True),
+            DataLoader(
+                val_ds_2,
+                batch_size=1,
+                shuffle=False,
+                num_workers=max(1, num_workers // 2),
+                pin_memory=True,
+            ),
+            len(train_ds_2),
+            len(val_ds_2),
+        ),
+    }
