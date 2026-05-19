@@ -1,82 +1,237 @@
-# RUN_0004 – AGENTS
+# RUN_0004 — Shared Encoder Multi-task Baseline (Tasks 1a, 1b, 2)
+
+## Run Metadata
 
 - **Run ID**: RUN_0004
-- **Date**: 2026-05-15 (planned)
-- **Tasks covered**: Task 1b (image quality enhancement / denoising)
-- **Parent run**: None (first Task 1b run; independent track from RUN_0001–0003)
-- **Change scope**: Architectural baseline
+- **Date**: à déterminer
+- **Tasks covered**: Task 1a (Quality Assessment), Task 1b (Enhancement), Task 2 (Segmentation)
+- **Parent run (Task 1a)**: RUN_0001 — baseline indépendant DenseNet264 (aggregate 0.6887)
+- **Parent run (Task 2)**: RUN_0003 — DynUNet 12-class (mean DSC 0.362)
+- **Parent run (Task 1b)**: aucun — le précédent RUN_0004 (BasicUNet auto-supervisé, FID=164) est **supplanté** par cette approche
+- **Change scope**: Architectural — pipeline multi-tâche complet, rupture avec les runs précédents
+
+## Comparabilité
+
+| Tâche | Comparable à | Raison |
+|-------|-------------|--------|
+| Task 1a | RUN_0001, RUN_0002 | Même split `task1a_fixed.pkl`, mêmes métriques (Accuracy, F1, F2, Precision, Recall) |
+| Task 1b | aucun | L'ancienne approche (débruitage auto-supervisé) est conceptuellement incompatible |
+| Task 2 | RUN_0003 | Même split `task2_fixed.pkl`, même script d'évaluation, même espace de classes (12) |
 
 ---
 
-## Full list of changes
+## Motivation scientifique
 
-- Added `Task1bUNetModel` to `src/models/__init__.py`: 3D MONAI `BasicUNet` with PRELU activations, instance normalisation, and transposed-convolution upsampling (features: 16–32–64–128–256).
-- Added `Task1bDataset`, `build_task1b_records`, `_subjects_from_split`, and `get_task1b_dataloaders` to `src/datasets/__init__.py`.  The dataset supports both subject-level (Task2 format) and index-level (Task1a format) split pickles.
-- Created `train_task1b.py`: self-supervised denoising trainer with L1+SSIM loss, AdamW, cosine-annealing LR, AMP, and early stopping.
-- Created `evaluate_task1b.py`: evaluator computing 3D PSNR, per-slice LPIPS (VGG), and FID (InceptionV3 pool features on axial slices).
-- Created `configs/run_0004_task1b_unet.yaml`: full run configuration.
-- Created `scripts/run_0004.sh`: launcher script with environment setup, directory creation, split verification, training, and evaluation steps.
+Les runs 0001–0003 ont établi des baselines indépendantes par tâche. La limite centrale de
+cette approche est que chaque modèle apprend des représentations isolées alors que les trois
+tâches portent sur les **mêmes volumes IRM 0.064T** et partagent une structure anatomique et
+des patterns d'artefacts communs.
+
+L'hypothèse directrice de ce run est qu'un **encodeur partagé et expressif** peut extraire
+des features génériques qui bénéficient simultanément à :
+
+1. **Task 1a** — les features de texture/intensité capturent les signatures des artefacts.
+2. **Task 1b** — les features de la distribution des images saines définissent un manifold
+   de reconstruction "propre" utilisable pour corriger les artefacts à l'inférence.
+3. **Task 2** — les features anatomiques de haut niveau guident la segmentation.
+
+Ce run est **non contraint** : aucune régularisation n'est imposée sur l'espace des features.
+Les runs suivants pourront introduire des contraintes (disentanglement, contrastive loss,
+information bottleneck) en prenant ce run comme référence comparative.
 
 ---
 
-## Assumptions and hypothesis
+## Architecture
 
-- No paired (degraded, clean) acquisitions are assumed to be available; the model is trained in a fully self-supervised regime.
-- Adding synthetic Gaussian noise (std ∈ [0.05, 0.20]) during training teaches the network to suppress real 0.064T noise patterns by exploiting spatial structure in the volumes.
-- A 3D U-Net with global context (encoder depth of 4) is sufficient to capture the dominant noise/artifact patterns of low-field MRI at 96³ resolution.
-- `_ciso.nii.gz` isotropic volumes are used as both input and reconstruction target; the same preprocessing pipeline as Task 2 is applied (NormalizeIntensity + CenterSpatialCrop + SpatialPad at 96³).
-- Using a compact feature map (16→256) limits GPU memory usage and allows batch size of 2 on a single 16 GB GPU.
+### Vue d'ensemble
+
+```
+Volume IRM 3D (1×128×128×128)
+        │
+        ▼
+┌───────────────────┐
+│  Shared Encoder   │  ← U-Net expressif 3D (5 niveaux)
+│  [32→64→128→256→320]  features multi-échelles
+└────────┬──────────┘
+         │ bottleneck + skip connections
+    ┌────┴────┬──────────┐
+    ▼         ▼          ▼
+┌────────┐ ┌────────┐ ┌────────┐
+│ Head   │ │ Head   │ │ Head   │
+│ 1a     │ │ 1b     │ │  2     │
+│ Classif│ │ Recon  │ │  Seg   │
+└────────┘ └────────┘ └────────┘
+```
+
+### Encodeur partagé
+
+- Architecture : U-Net 3D à 5 niveaux (inspiré de DynUNet MONAI)
+- Filtres : [32, 64, 128, 256, 320]
+- Noyaux : 3×3×3 à chaque niveau
+- Strides encodeur : [1, 2, 2, 2, 2]
+- Normalisation : Instance Normalization
+- Activation : LeakyReLU (pente=0.01)
+- Sortie encodeur : bottleneck 320 canaux (4×4×4 pour une entrée 128³) + 4 feature maps de skip
+
+### Head Task 1a — Classification des artefacts
+
+- Entrée : bottleneck de l'encodeur (320×4×4×4)
+- Global Average Pooling 3D → vecteur 320-dim
+- MLP : Linear(320, 128) → LeakyReLU → Dropout(0.3) → Linear(128, 7×3)
+- Sortie : logits [B, 7, 3] (7 artefacts × 3 niveaux)
+- Perte : Cross-Entropy indépendante par tête d'artefact
+
+### Head Task 1b — Reconstruction (Autoencoder)
+
+- Entrée : bottleneck + skip connections de l'encodeur
+- Décodeur symétrique à l'encodeur (strides transposés 2×2×2)
+- Sortie : volume reconstruit 1×128×128×128
+- **Données d'entraînement** : uniquement les volumes **non artefactés** (scores = 0
+  sur les 7 artefacts dans la CSV Task 1a), identifiés par filtrage à la construction
+  du DataLoader
+- Perte : L1 + SSIM 3D (λ_L1=1.0, λ_SSIM=1.0)
+- À l'inférence : les volumes artefactés passent également à travers ce décodeur ;
+  la reconstruction est l'estimation du volume "propre"
+
+### Head Task 2 — Segmentation
+
+- Entrée : bottleneck + skip connections de l'encodeur
+- Décodeur symétrique à l'encodeur (strides transposés 2×2×2)
+- Sortie : logits [B, 12, 128, 128, 128]
+- Perte : DiceCE (λ_dice=1.0, λ_ce=1.0)
 
 ---
 
-## Training and evaluation configuration
+## Stratégie d'entraînement
 
-| Parameter | Value |
-|---|---|
-| Config file | `configs/run_0004_task1b_unet.yaml` |
-| Train script | `train_task1b.py` |
-| Eval script | `evaluate_task1b.py` |
-| Split file | `results/splits/task1a_fixed.pkl` |
-| Model | 3D BasicUNet (MONAI), features [16,32,64,128,256,16] |
-| Loss | L1 (w=1.0) + SSIM (w=1.0) |
-| Optimizer | AdamW, lr=1e-4, wd=1e-5 |
-| Scheduler | CosineAnnealingLR, T_max=80, eta_min=1e-6 |
-| Spatial size | 96³ |
-| Batch size | 2 |
-| Max epochs | 80 |
-| Early stopping | patience=15 (monitored on val reconstruction loss) |
-| Noise std range | [0.05, 0.20] uniform |
-| Val noise std | 0.125 (fixed mid-range) |
-| AMP | True |
+### Entraînement conjoint
+
+La perte totale est une somme pondérée des trois contributions :
+
+```
+L_total = λ_1a · L_classification + λ_1b · L_reconstruction + λ_2 · L_segmentation
+```
+
+Poids initiaux : λ_1a = 1.0, λ_1b = 1.0, λ_2 = 1.0 (baseline non contraint).
+
+### Hétérogénéité des données
+
+Les trois jeux de données ne sont pas parfaitement alignés :
+
+| Source | Disponibilité des labels | Utilisation |
+|--------|--------------------------|-------------|
+| Volumes Task 1a | Labels artefacts (7×3) | Head 1a active |
+| Volumes Task 1a propres (scores=0) | Identité (image→image) | Head 1b active |
+| Volumes Task 2 | Masques segmentation | Head 2 active |
+
+**Stratégie de batch** : à chaque itération, un batch est construit en mélangeant les
+trois sources. Pour chaque sample du batch, seules les têtes pour lesquelles des labels
+sont disponibles contribuent à la perte. Les têtes sans label sont masquées (`loss *= 0`).
+
+### Phases d'entraînement
+
+1. **Warm-up (10 epochs)** : entraîner uniquement la tête Task 2 (supervision dense, plus
+   stable) pour initialiser l'encodeur sur une tâche à fort signal.
+2. **Entraînement joint (N epochs)** : activer les trois têtes simultanément.
+3. **Early stopping** : surveillé sur la moyenne pondérée des métriques de validation :
+   `0.4 · DSC_2 + 0.3 · Aggregate_1a + 0.3 · (1 - LPIPS_1b)`
+
+---
+
+## Hypothèses et prédictions
+
+| Hypothèse | Résultat attendu | Indicateur de validation |
+|-----------|-----------------|--------------------------|
+| H1 : Features partagées bénéfiques pour Task 2 | DSC ≥ RUN_0003 (0.362) | metrics.json `mean_dsc` |
+| H2 : Head 1a compétitive sans encodeur spécialisé | Aggregate proche de RUN_0001 (0.6887) | metrics.json `aggregate` |
+| H3 : Head 1b apprend le manifold des images propres | FID ↓ vs ancien RUN_0004 (164) | metrics.json `fid` |
+| H4 : Dominance de L_2 (supervision dense) | Gradient de L_2 >> L_1a, L_1b | logs de perte par composante |
+| H5 (risque) : Conflit de gradient entre tâches | DSC < RUN_0003 et/ou Aggregate < RUN_0001 | → motiverait les contraintes de features dans RUN_0005 |
+
+---
+
+## Configuration d'entraînement
+
+| Paramètre | Valeur |
+|-----------|--------|
+| Config | `configs/run_0004_multitask.yaml` |
+| Entrainement | `python train.py --run 0004` |
+| Évaluation | `python evaluate.py --run 0004` |
+| Split Task 1a | `results/splits/task1a_fixed.pkl` |
+| Split Task 2 | `results/splits/task2_fixed.pkl` |
+| Patch size | 128³ |
+| Batch size | 2 (mémoire : 3 décodeurs + encodeur) |
+| Warm-up epochs | 10 (Task 2 seul) |
+| Epochs (joint) | 80 |
+| Early stopping patience | 15 (perte jointe) |
+| Optimiseur | AdamW, lr=1e-4, wd=1e-5 |
+| Scheduler | CosineAnnealingLR, T_max=90, eta_min=1e-6 |
+| Mixed precision | True |
 | Seed | 42 |
+| λ_1a | 1.0 |
+| λ_1b | 1.0 |
+| λ_2 | 1.0 |
 
 ---
 
-## Implementation plan
+## Plan d'implémentation
 
-See `implementation_plan.md`.
+Voir `implementation_plan.md` pour les détails d'exécution.
+
+### Étapes résumées
+
+1. **Modèle** : implémenter `SharedEncoderModel` dans `src/models/__init__.py` avec les
+   trois têtes. L'encodeur est un `DynUNet` tronqué ; les décodeurs 1b et 2 réutilisent
+   les blocs up-sampling de DynUNet.
+
+2. **Datasets** : créer `MultiTaskDataset` dans `src/datasets/__init__.py` qui gère
+   l'hétérogénéité (labels disponibles par sample) et retourne un dict de masques
+   indiquant quelles têtes sont actives.
+
+3. **Entraînement** : créer `src/train_task_multitask.py` avec la logique de batch mixte,
+   warm-up Task 2, et le calcul de perte masqué.
+
+4. **Évaluation** : créer `src/evaluate_task_multitask.py` qui évalue séparément les
+   métriques des trois tâches et les agrège dans `metrics.json`.
+
+5. **Config** : créer `configs/run_0004_multitask.yaml`.
+
+6. **Enregistrement** : mettre à jour les registres dans `train.py` et `evaluate.py`.
 
 ---
 
-## Results summary
+## Résultats
 
-| Metric | Value |
-|---|---|
-| PSNR | pending |
-| LPIPS | pending |
-| FID | pending |
+| Métrique | Valeur |
+|----------|--------|
+| Task 1a — Aggregate | en attente |
+| Task 2 — mean DSC | en attente |
+| Task 1b — FID | en attente |
+| Task 1b — PSNR | en attente |
+| Task 1b — LPIPS | en attente |
 
-Status: **not_run** – training and evaluation have not been executed yet.
-
----
-
-## Comparability statement
-
-RUN_0004 is not directly comparable to RUN_0001–RUN_0003: it targets Task 1b (image enhancement) which uses an entirely different objective, data pipeline, and metric family (PSNR/LPIPS/FID vs classification accuracy or DSC).  Within the Task 1b track, all future runs should use the same split file, spatial size, and evaluation script version to remain comparable with RUN_0004.
+**Status : non exécuté** — en attente d'implémentation.
 
 ---
 
-## Decision
+## Décision
 
-- Status: **planned**
-- Promotion: pending execution and metric review
+- [ ] Promu
+- [ ] Rejeté
+- [ ] À retester
+
+---
+
+## Notes
+
+- Ce run **ne conserve pas** l'ancienne implémentation BasicUNet de RUN_0004
+  (auto-débruitage supervisé par bruit gaussien synthétique). Cette approche est
+  abandonnée car elle ne s'inscrit pas dans la logique de représentation partagée
+  adoptée à partir de ce run.
+- L'absence de contrainte sur les features est **volontaire** pour ce run : elle servira
+  de référence pour mesurer l'apport des contraintes dans les runs suivants (par exemple,
+  régularisation de disentanglement artefacts/anatomie, ou perte contrastive sur les
+  niveaux d'artefacts).
+- Le conflit de gradient entre les trois tâches est le principal risque. Si H5 se confirme,
+  le run suivant devra introduire un mécanisme de pondération adaptative des pertes
+  (GradNorm, PCGrad, ou pondération par incertitude).
