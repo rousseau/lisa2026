@@ -23,7 +23,7 @@ from sklearn.metrics import (
 from tqdm import tqdm
 
 from src.datasets import TASK_NAMES, get_multitask_dataloaders
-from src.models import SharedEncoderMultiTaskModel
+from src.models import DynUNetMultiHeadModel
 
 EPS = 1e-8
 
@@ -432,8 +432,8 @@ def main():
 
     # ── Build model ───────────────────────────────────────────────────────────
     model_cfg = config["model"]
-    model = SharedEncoderMultiTaskModel(
-        in_channels=int(model_cfg["in_channels"]),
+    model = DynUNetMultiHeadModel(
+        in_channels=int(model_cfg.get("in_channels", 1)),
         filters=tuple(int(x) for x in model_cfg["filters"]),
         num_seg_classes=int(model_cfg["num_seg_classes"]),
         num_artifact_tasks=int(model_cfg["num_artifact_tasks"]),

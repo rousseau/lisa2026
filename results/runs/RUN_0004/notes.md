@@ -128,3 +128,66 @@ montrer de progrès en segmentation depuis l'epoch 1.
   absence de prédictions 1b exploitables). À corriger pour RUN_0005.
 - La décision d'abandonner la tête 1b autoencoder au profit d'une approche supervisée
   (si des paires sont disponibles) mérite d'être revisitée.
+
+---
+
+## Corrections v2 (appliquées et testées par smoke test local)
+
+Après analyse des 3 causes racines, **RUN_0004 a été corrigé en place** plutôt que
+renommé RUN_0005. Trois modifications ciblées :
+
+### Correction 1 : `DynUNetMultiHeadModel` (compatibilité warm-start)
+
+Remplacement de `SharedEncoderMultiTaskModel` par `DynUNetMultiHeadModel` dans
+`src/models/__init__.py`. Le backbone Task 2 est maintenant un MONAI `DynUNet` identique
+à `Task2DynUNetModel` de RUN_0003.
+
+**Résultat** : `46/84 keys matched` (vs 0/102 en v1). Les ~40 clés restantes sont les
+têtes 1a/1b (`cls_*`, `recon_*`) qui sont bien des paramètres nouveaux.
+
+### Correction 2 : `_calibrate_losses()` (pondération adaptative)
+
+Nouvelle méthode mesurant les pertes initiales sur un batch de chaque tâche, puis
+normalisant chaque tâche par sa magnitude avant la phase joint : `loss_total = λ₁·L₁/L₀₁ + λ₂·L₂/L₀₂ + …`.
+
+**Résultat** : `λ_1a/L0=0.1387 λ_1b/L0=0.4779 λ_2/L0=1.1798` — les pertes sont équilibrées
+et la segmentation ne collapse plus.
+
+### Correction 3 : Warmup étendu + early exit
+
+- `num_warmup_epochs` : 10 → 30
+- Ajout d'un critère `dice_warmup_target: 0.15` : sortie anticipée si val_dice_2 ≥ target
+
+**Résultat** : `val_dice_2=0.5145 >= target 0.15` → warmup terminé à l'epoch 1 (car les
+poids pré-entraînés déjà bons). En pleine exécution Jean Zay, le warmup durera 30 epochs
+max pour apprendre from scratch si nécessaire.
+
+### Preuve — smoke test local (v2)
+
+```
+Partial encoder warm-start: 46/84 keys matched
+[Calibration] Effective weights: λ_1a/L0=0.1387  λ_1b/L0=0.4779  λ_2/L0=1.1798
+[Warmup] Epoch 001 | val_dice_2=0.5145 -> early exit (>= 0.15)
+[Joint] Epoch 001 | val_dice_2=0.5317 -> NO collapse
+```
+
+**DSC post-joint : 0.5317** (vs 0.0000 en v1). **PSNR 1b : 3.48 dB** (unchanged).
+**Aggregate 1a : 0.1293** (unchanged, besoin de plus d'epochs).
+
+### Comparaison v1 vs v2
+
+| Aspect | v1 (REJETÉ) | v2 (prêt Jean Zay) |
+|---|---|---|
+| Modèle | `SharedEncoderMultiTaskModel` (custom Conv3d) | `DynUNetMultiHeadModel` (MONAI DynUNet) |
+| Warm-start | 0/102 keys | 46/84 keys (~55%) |
+| Loss équilibrée | Non (ratio 2.7:1) | Oui (normalisée) |
+| Warmup | 10 epochs, fixe | 30 epochs max + early exit DSC ≥ 0.15 |
+| DSC post-joint | **0.0000** | **0.5317** (smoke test) |
+| Decision | REJETÉ | **En attente de ré-exécution Jean Zay** |
+
+### Prochaine étape
+
+**Ré-exécuter le run v2 sur Jean Zay H100** :
+```bash
+bash src/slurm/submit.sh --run 0004
+```

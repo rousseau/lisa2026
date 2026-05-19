@@ -234,21 +234,29 @@ architecture compatible avec DynUNet pour le warm-start, durée de warmup accrue
 
 ---
 
-## Environnement d'exécution réel
+## Environnement d'exécution réel — **v2 : corrections appliquées**
 
-| Paramètre | Valeur |
-|-----------|--------|
-| Date | 2026-05-19 |
-| Nœud | jzxh002 (Jean Zay) |
-| GPU | NVIDIA H100 80GB HBM3 |
-| PyTorch | 2.5.0 |
-| Python | 3.12.7 |
-| CUDA | 12.4.1 |
-| Job SLURM | 878620 |
-| Durée totale | 56 min |
-| Log | outputs/logs/lisa2026_878620.out |
-| Epochs réalisés | 25/90 (early stop epoch 25) |
-| Meilleur checkpoint | warmup epoch 1, val_dice_2=0.0083 |
+Ce run a été **rejeté** après exécution (v1, job 878620, 2026-05-19) mais **corrigé** (v2) et prêt pour ré-exécution.
+
+### Corrections appliquées (v2)
+
+| Cause racine (v1) | Correction (v2) | Preuve smoke test |
+|---|---|---|
+| 0/102 keys matched | `DynUNetMultiHeadModel` avec backbone DynUNet identique → 46/84 keys |
+| Loss 1a domine (ratio 2.7:1) | `_calibrate_losses()` normalise chaque tâche par sa magnitude initiale |
+| Warmup trop court (10 epochs) | 30 epochs + early exit si DSC ≥ 0.15 |
+| Early stopping sur val_dice_2 seul | Non modifié (val_dice_2 reste le critère de sauvegarde) |
+
+### Résultats du smoke test v2 (local, GB10)
+
+```
+[INFO] Partial encoder warm-start: 46/84 keys matched
+[Calibration] Effective weights: λ_1a/L0=0.1387  λ_1b/L0=0.4779  λ_2/L0=1.1798
+[Warmup] Epoch 001 | val_dice_2=0.5145  -> early exit (≥ 0.15)
+[Joint] Epoch 001 | val_dice_2=0.5317  -> NO collapse
+```
+
+**DSC post-joint : 0.5317** (vs 0.0000 en v1). La segmentation survive à la phase joint.
 
 ---
 

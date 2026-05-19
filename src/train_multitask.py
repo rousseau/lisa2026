@@ -20,7 +20,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm import tqdm
 
 from src.datasets import get_multitask_dataloaders
-from src.models import SharedEncoderMultiTaskModel
+from src.models import DynUNetMultiHeadModel
 
 
 def set_seed(seed: int):
@@ -69,8 +69,8 @@ class MultiTaskTrainer:
 
         # ── Model ─────────────────────────────────────────────────────────────
         model_cfg = config["model"]
-        self.model = SharedEncoderMultiTaskModel(
-            in_channels=int(model_cfg["in_channels"]),
+        self.model = DynUNetMultiHeadModel(
+            in_channels=int(model_cfg.get("in_channels", 1)),
             filters=tuple(int(x) for x in model_cfg["filters"]),
             num_seg_classes=int(model_cfg["num_seg_classes"]),
             num_artifact_tasks=int(model_cfg["num_artifact_tasks"]),
@@ -173,11 +173,23 @@ class MultiTaskTrainer:
         self.best_val_dice = -1.0
         self.patience_counter = 0
 
+        # ── Warmup early-exit target ──────────────────────────────────────────
+        self.dice_warmup_target = float(
+            config["training"].get("dice_warmup_target", 0.15)
+        )
+
+        # ── Loss normalization scales (calibrated before joint phase) ─────────
+        self.loss_scale_1a = 1.0
+        self.loss_scale_1b = 1.0
+        self.loss_scale_2 = 1.0
+
         print(f"Device : {self.device} | AMP : {self.use_amp}")
         print(
-            f"Warm-up: {self.num_warmup_epochs} epochs | "
+            f"Warm-up: {self.num_warmup_epochs} epochs "
+            f"(early exit if DSC≥{self.dice_warmup_target:.2f}) | "
             f"Joint: {self.num_epochs} epochs | "
-            f"λ=(1a={self.lambda_1a}, 1b={self.lambda_1b}, 2={self.lambda_2})"
+            f"λ=(1a={self.lambda_1a}, 1b={self.lambda_1b}, 2={self.lambda_2}) "
+            f"[loss-normalized]"
         )
 
     # ─── Loss helpers ──────────────────────────────────────────────────────────
@@ -216,6 +228,55 @@ class MultiTaskTrainer:
         target_c = torch.clamp(target, 0.0, 1.0)
         ssim = self.ssim_loss_fn(recon_c, target_c)
         return self.l1_weight * l1 + self.ssim_weight * ssim
+
+    @torch.no_grad()
+    def _calibrate_losses(self) -> tuple:
+        """Measure initial loss magnitudes (no grad) to normalise joint training.
+
+        Runs one forward pass on one batch from each task loader and records the
+        raw loss values *before* any joint-phase update.  These values are used
+        as divisors in ``train_one_epoch_joint`` so that every task contributes
+        equally to the total gradient at the start of joint training.
+
+        Returns:
+            Tuple (scale_1a, scale_1b, scale_2) — initial loss values.
+            Each is clamped to ≥ 1e-6 to prevent division by zero.
+        """
+        self.model.eval()
+        MIN_SCALE = 1e-6
+
+        b1a = next(iter(self.train_loader_1a))
+        b1b = next(iter(self.train_loader_1b))
+        b2 = next(iter(self.train_loader_2))
+
+        with torch.amp.autocast("cuda", enabled=self.use_amp):
+            l_1a = self._loss_1a(
+                self.model.forward_task1a(b1a["img"].to(self.device)),
+                b1a["labels"].to(self.device),
+            )
+            l_1b = self._loss_1b(
+                self.model.forward_task1b(b1b["img"].to(self.device)),
+                b1b["img"].to(self.device),
+            )
+            l_2 = self.seg_loss_fn(
+                self.model.forward_task2(b2["img"].to(self.device)),
+                b2["label"].to(self.device),
+            )
+
+        self.model.train()
+
+        s1a = max(float(l_1a.item()), MIN_SCALE)
+        s1b = max(float(l_1b.item()), MIN_SCALE)
+        s2 = max(float(l_2.item()), MIN_SCALE)
+
+        print(f"[Calibration] Initial losses — 1a={s1a:.4f}  1b={s1b:.4f}  2={s2:.4f}")
+        print(
+            f"[Calibration] Effective weights after normalisation — "
+            f"λ_1a/L0={self.lambda_1a / s1a:.4f}  "
+            f"λ_1b/L0={self.lambda_1b / s1b:.4f}  "
+            f"λ_2/L0={self.lambda_2 / s2:.4f}"
+        )
+        return s1a, s1b, s2
 
     # ─── Training phases ───────────────────────────────────────────────────────
 
@@ -313,7 +374,9 @@ class MultiTaskTrainer:
                 l_2 = self.seg_loss_fn(seg_logits, labels_2)
 
                 loss = (
-                    self.lambda_1a * l_1a + self.lambda_1b * l_1b + self.lambda_2 * l_2
+                    self.lambda_1a * l_1a / self.loss_scale_1a
+                    + self.lambda_1b * l_1b / self.loss_scale_1b
+                    + self.lambda_2 * l_2 / self.loss_scale_2
                 )
 
             self.scaler.scale(loss).backward()
@@ -438,15 +501,21 @@ class MultiTaskTrainer:
         """Full training loop: warm-up phase then joint phase."""
         run_meta = {
             "run_id": self.config.get("run_id", "0004"),
+            "model": "DynUNetMultiHeadModel",
             "pretrained_checkpoint": self.config["training"].get(
                 "pretrained_checkpoint", ""
             ),
             "pretrained_loaded": self.pretrained_loaded,
             "device": self.device,
             "num_warmup_epochs": self.num_warmup_epochs,
+            "dice_warmup_target": self.dice_warmup_target,
             "num_epochs": self.num_epochs,
             "num_seg_classes": int(self.config["model"]["num_seg_classes"]),
             "filters": list(self.config["model"].get("filters", [])),
+            "loss_normalization": True,
+            "loss_scale_1a": None,  # filled after calibration
+            "loss_scale_1b": None,
+            "loss_scale_2": None,
         }
         history = [run_meta]
 
@@ -488,12 +557,29 @@ class MultiTaskTrainer:
 
             self.scheduler.step()
 
+            if val_metrics["val_dice_2"] >= self.dice_warmup_target:
+                print(
+                    f"  -> Warmup early exit at epoch {epoch + 1}: "
+                    f"val_dice_2={val_metrics['val_dice_2']:.4f} "
+                    f">= target {self.dice_warmup_target:.2f}"
+                )
+                break
+
             if self.smoke_test:
                 break
 
         # ════════════════════════════════════════════════════════════════════
         # Phase 2 — Joint training (all 3 tasks)
         # ════════════════════════════════════════════════════════════════════
+        # ── Calibrate loss scales before joint phase ──────────────────────────
+        self.loss_scale_1a, self.loss_scale_1b, self.loss_scale_2 = (
+            self._calibrate_losses()
+        )
+        # Back-fill scales in run_meta for history logging
+        history[0]["loss_scale_1a"] = self.loss_scale_1a
+        history[0]["loss_scale_1b"] = self.loss_scale_1b
+        history[0]["loss_scale_2"] = self.loss_scale_2
+
         print(
             f"\n{'=' * 60}\n"
             f"Joint phase ({self.num_epochs} epochs) — all 3 tasks\n"
