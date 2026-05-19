@@ -1,0 +1,117 @@
+=======================================================================
+  LISA 2026 — RUN_0004
+  Job     : 878620
+  Nœud    : jzxh002
+  Projet  : /lustre/fswork/projects/rech/crp/ulq73oz/LISA/lisa2026
+  Données : /lustre/fswork/projects/rech/crp/ulq73oz/LISA/data
+  Smoke   : non
+  Début   : Tue May 19 13:35:08 CEST 2026
+=======================================================================
+  Python  : Python 3.12.7
+  PyTorch : 2.5.0
+  GPU     : NVIDIA H100 80GB HBM3, 81559 MiB
+
+── Entraînement RUN_0004 ──────────────────────────────────────────
+
+[LISA 2026] Training
+  Run    : 0004
+  Task   : 1a+1b+2
+  Module : src.train_multitask
+  Config : configs/run_0004_multitask.yaml
+
+============================================================
+  Module : src.train_multitask
+  Config : configs/run_0004_multitask.yaml
+============================================================
+
+  $ /lustre/fshomisc/sup/pub/anaconda-py3/h100/2024.06/envs/pytorch-gpu-2.5.0+py3.12.7/bin/python3 -m src.train_multitask --config configs/run_0004_multitask.yaml
+Task 1a : train=436, val=96
+Task 1b : train=25, val=10
+Task 2  : train=48,  val=12
+[INFO] Partial encoder warm-start from outputs/checkpoints/RUN_0003/task2_dynunet_best.pt: 0/102 keys matched.
+Device : cuda | AMP : True
+Warm-up: 10 epochs | Joint: 80 epochs | λ=(1a=1.0, 1b=1.0, 2=1.0)
+
+============================================================
+Warm-up phase (10 epochs) — Task 2 only
+============================================================
+[Warmup] Epoch 001/010 | train_loss=2.9772 | val_dice_2=0.0083 | val_loss_1a=7.7959 | val_loss_1b=1.4028
+  -> New best checkpoint saved (warmup, val_dice_2=0.0083)
+[Warmup] Epoch 002/010 | train_loss=2.6966 | val_dice_2=0.0039 | val_loss_1a=7.7715 | val_loss_1b=1.4136
+[Warmup] Epoch 003/010 | train_loss=2.5929 | val_dice_2=0.0026 | val_loss_1a=7.7788 | val_loss_1b=1.4135
+[Warmup] Epoch 004/010 | train_loss=2.4943 | val_dice_2=0.0015 | val_loss_1a=7.7866 | val_loss_1b=1.4202
+[Warmup] Epoch 005/010 | train_loss=2.4047 | val_dice_2=0.0012 | val_loss_1a=7.7871 | val_loss_1b=1.4204
+[Warmup] Epoch 006/010 | train_loss=2.3180 | val_dice_2=0.0040 | val_loss_1a=7.7767 | val_loss_1b=1.4375
+[Warmup] Epoch 007/010 | train_loss=2.2267 | val_dice_2=0.0016 | val_loss_1a=7.7750 | val_loss_1b=1.4338
+[Warmup] Epoch 008/010 | train_loss=2.1384 | val_dice_2=0.0011 | val_loss_1a=7.7786 | val_loss_1b=1.4240
+[Warmup] Epoch 009/010 | train_loss=2.0584 | val_dice_2=0.0000 | val_loss_1a=7.7808 | val_loss_1b=1.4417
+[Warmup] Epoch 010/010 | train_loss=1.9809 | val_dice_2=0.0000 | val_loss_1a=7.7758 | val_loss_1b=1.4328
+
+============================================================
+Joint phase (80 epochs) — all 3 tasks
+============================================================
+[Joint] Epoch 001/080 (global 011) | total=8.6139 | 1a=5.1527 | 1b=1.5430 | 2=1.9182 | val_dice_2=0.0000
+[Joint] Epoch 002/080 (global 012) | total=8.0393 | 1a=4.5856 | 1b=1.5356 | 2=1.9181 | val_dice_2=0.0000
+[Joint] Epoch 003/080 (global 013) | total=7.9413 | 1a=4.5220 | 1b=1.5066 | 2=1.9126 | val_dice_2=0.0000
+[Joint] Epoch 004/080 (global 014) | total=7.9954 | 1a=4.5810 | 1b=1.5032 | 2=1.9113 | val_dice_2=0.0000
+[Joint] Epoch 005/080 (global 015) | total=7.9491 | 1a=4.5354 | 1b=1.5031 | 2=1.9106 | val_dice_2=0.0000
+[Joint] Epoch 006/080 (global 016) | total=8.0202 | 1a=4.6031 | 1b=1.4994 | 2=1.9177 | val_dice_2=0.0000
+[Joint] Epoch 007/080 (global 017) | total=7.9470 | 1a=4.5576 | 1b=1.4741 | 2=1.9153 | val_dice_2=0.0000
+[Joint] Epoch 008/080 (global 018) | total=7.8619 | 1a=4.4922 | 1b=1.4506 | 2=1.9191 | val_dice_2=0.0000
+[Joint] Epoch 009/080 (global 019) | total=7.9340 | 1a=4.5677 | 1b=1.4459 | 2=1.9204 | val_dice_2=0.0000
+[Joint] Epoch 010/080 (global 020) | total=7.8406 | 1a=4.5204 | 1b=1.4011 | 2=1.9190 | val_dice_2=0.0000
+[Joint] Epoch 011/080 (global 021) | total=7.7348 | 1a=4.5141 | 1b=1.2994 | 2=1.9213 | val_dice_2=0.0000
+[Joint] Epoch 012/080 (global 022) | total=7.6683 | 1a=4.5360 | 1b=1.2059 | 2=1.9263 | val_dice_2=0.0000
+[Joint] Epoch 013/080 (global 023) | total=7.6540 | 1a=4.4990 | 1b=1.2321 | 2=1.9229 | val_dice_2=0.0000
+[Joint] Epoch 014/080 (global 024) | total=7.6502 | 1a=4.4839 | 1b=1.2360 | 2=1.9304 | val_dice_2=0.0000
+[Joint] Epoch 015/080 (global 025) | total=7.6742 | 1a=4.5141 | 1b=1.2345 | 2=1.9257 | val_dice_2=0.0000
+  -> Early stopping triggered at epoch 25 (patience=15)
+
+Training complete. Best val Dice (Task 2): 0.0083
+Checkpoint : outputs/checkpoints/RUN_0004/multitask_best.pt
+History    : results/runs/RUN_0004/training_history.json
+
+[OK] Training completed.
+  Durée : 54 min
+
+── Évaluation RUN_0004 ────────────────────────────────────────────
+
+[LISA 2026] Evaluation
+  Run    : 0004
+  Task   : 1a+1b+2
+  Module : src.evaluate_multitask
+  Config : configs/run_0004_multitask.yaml
+
+[1/1] Running multi-task evaluation (Tasks 1a, 1b, 2)
+  $ /lustre/fshomisc/sup/pub/anaconda-py3/h100/2024.06/envs/pytorch-gpu-2.5.0+py3.12.7/bin/python3 -m src.evaluate_multitask --config configs/run_0004_multitask.yaml
+[INFO] Loaded checkpoint from outputs/checkpoints/RUN_0004/multitask_best.pt (epoch 1, val_dice_2=0.0083)
+Val sizes — 1a: 96, 1b: 10, 2: 12
+
+── Task 1a — Artifact classification ──
+
+── Task 1b — Image reconstruction ──
+
+── Task 2 — Multi-structure segmentation ──
+
+[INFO] Metrics saved to results/runs/RUN_0004/metrics.json
+
+── Summary ──────────────────────────────────────────────────────────
+  Task 1a — aggregate       : 0.1293
+  Task 1a — accuracy (global): 0.0997
+  Task 1b — PSNR            : 3.48 dB
+  Task 1b — L1              : 1.4028
+  Task 1b — n_subjects      : 10
+  Task 2  — mean DSC        : 0.0083
+  Task 2  — mean HD95       : 66.21
+  Task 2  — mean ASSD       : 37.80
+  Task 2  — n_subjects      : 12
+
+[OK] Evaluation complete.
+  Durée : 2 min
+
+=======================================================================
+  TERMINÉ — RUN_0004
+  Durée totale : 56 min
+  Métriques    : results/runs/RUN_0004/metrics.json
+  Fin          : Tue May 19 14:32:41 CEST 2026
+=======================================================================

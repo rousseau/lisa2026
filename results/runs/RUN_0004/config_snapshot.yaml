@@ -1,61 +1,83 @@
 run_id: "0004"
-run_name: "task1b_unet_selfsuper_baseline"
-date: "2026-05-15"
+run_name: "multitask_shared_encoder"
+date: "2026-05-19"
 description: >
-  Self-supervised denoising baseline for Task 1b. 3D BasicUNet trained to
-  reconstruct clean images from synthetically degraded inputs (Gaussian noise).
-  No paired data required. Evaluated with PSNR, LPIPS, FID on 2D axial slices.
-
-# ── snapshot of configs/run_0004_task1b_unet.yaml at implementation time ────
+  Single shared 3D U-Net encoder with three task-specific heads:
+  classification (Task 1a), reconstruction autoencoder on clean images (Task 1b),
+  and multi-structure segmentation (Task 2). No feature constraint (unconstrained baseline).
 
 data:
-  data_root: "/home/rousseau/Data/LISA2026"
-  split_pkl: "results/splits/task1a_fixed.pkl"
+  data_root: "/lustre/fswork/projects/rech/crp/ulq73oz/LISA/data"
+  bids_root: "/lustre/fswork/projects/rech/crp/ulq73oz/LISA/data"
+  csv_path: "/lustre/fswork/projects/rech/crp/ulq73oz/LISA/data/LISA_Task1a_2026.csv"
+  split_pkl_1a: "results/splits/task1a_fixed.pkl"
+  split_pkl_2: "results/splits/task2_fixed.pkl"
   image_suffix: "_ciso.nii.gz"
-  spatial_size: [96, 96, 96]
-  noise_std_min: 0.05
-  noise_std_max: 0.20
+  label_suffix: "_LF_seg.nii.gz"
+  patch_size: [128, 128, 128]
+  val_roi_size: [128, 128, 128]
+  train_num_samples: 1
+  task1a_train: 436
+  task1a_val: 96
+  task1b_train: 25
+  task1b_val: 10
+  task2_train: 48
+  task2_val: 12
 
 model:
   in_channels: 1
-  out_channels: 1
-  features: [16, 32, 64, 128, 256, 16] # 6 values required by MONAI BasicUNet
+  filters: [32, 64, 128, 256, 320]
+  num_seg_classes: 12
+  num_artifact_tasks: 7
+  num_artifact_classes: 3
+  pretrained_checkpoint: "outputs/checkpoints/RUN_0003/task2_dynunet_best.pt"
+  pretrained_keys_matched: 0
+  pretrained_total_keys: 102
 
 training:
-  batch_size: 2
+  batch_size: 1
   num_workers: 4
+  num_warmup_epochs: 10
   num_epochs: 80
+  num_epochs_actual: 25 # early stopped
   learning_rate: 1.0e-4
   min_learning_rate: 1.0e-6
   weight_decay: 1.0e-5
-  loss:
-    l1_weight: 1.0
-    ssim_weight: 1.0
+  lambda_1a: 1.0
+  lambda_1b: 1.0
+  lambda_2: 1.0
 
 early_stopping:
   patience: 15
+  monitor: "val_dice_2"
+  triggered_at_global_epoch: 25
+  best_val_dice_2: 0.0083
+  best_checkpoint_epoch: 1
 
 inference:
-  fid_num_slices_per_volume: 10
+  sw_batch_size: 1
+  overlap: 0.5
+  tta_flip_axes: []
+  keep_largest_component: false
 
 environment:
   seed: 42
   deterministic: true
   mixed_precision: true
 
+execution_environment:
+  python: "3.12.7"
+  pytorch: "2.5.0"
+  cuda: "12.4.1"
+  gpu: "NVIDIA H100 80GB HBM3"
+  hostname: "jzxh002"
+  job_id: "878620"
+  date_start: "2026-05-19 13:35:08 CEST"
+  date_end: "2026-05-19 14:32:41 CEST"
+  duration_min: 56
+
 output:
   checkpoint_dir: "outputs/checkpoints/RUN_0004"
   log_dir: "outputs/logs/RUN_0004"
   results_dir: "results/runs/RUN_0004"
-
-# ── environment at implementation time ──────────────────────────────────────
-# These values are filled in when the run is actually executed.
-execution_environment:
-  python: "pending"
-  pytorch: "2.11.0+cu130" # expected – from conda lisa2026
-  torchvision: "0.26.0+cu130" # expected
-  monai: "pending"
-  lpips: "0.1.4" # expected
-  cuda: "pending"
-  gpu: "pending"
-  hostname: "pending"
+  log_file: "outputs/logs/lisa2026_878620.out"

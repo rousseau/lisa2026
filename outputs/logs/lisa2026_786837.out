@@ -1,0 +1,153 @@
+=======================================================================
+ Job ID    : 786837
+ Nœud      : jzxh107
+ Code      : /lustre/fswork/projects/rech/crp/ulq73oz/LISA/lisa2026
+ Run       : RUN_0002
+ Launcher  : scripts/run_0002.sh
+ Args      : <none>
+=======================================================================
+Données NIfTI  : OK (873 volumes dans /lustre/fswork/projects/rech/crp/ulq73oz/LISA/data)
+GPU            : NVIDIA H100 80GB HBM3, 81559 MiB
+
+Lancement : bash scripts/run_0002.sh 
+
+==========================================
+RUN_0002 – Multi-label EMD+Focal Launcher
+Date: Wed May 13 12:06:51 CEST 2026
+==========================================
+
+[1/5] Loading Python environment...
+  ! using current environment (SLURM/module or LISA_SKIP_CONDA set)
+✓ Environment loaded
+Python 3.12.7
+  PyTorch: 2.5.0
+  CUDA: 12.4
+  Python: /lustre/fshomisc/sup/pub/anaconda-py3/h100/2024.06/envs/pytorch-gpu-2.5.0+py3.12.7/bin/python3
+  Data root: /lustre/fswork/projects/rech/crp/ulq73oz/LISA/data
+  CSV path:  /lustre/fswork/projects/rech/crp/ulq73oz/LISA/data/LISA_Task1a_2026.csv
+
+[2/5] Creating output directories...
+✓ Directories created
+
+[3/5] Ensuring patient-level split exists...
+  ✓ Split already exists – reusing for fair comparison with RUN_0001
+
+[4/5] Starting multi-label training (7 tasks simultaneously)...
+  Train: 436 samples | Val: 96 samples
+  Model parameters: 40,302,357
+
+============================================================
+RUN_0002 – Multi-label Training (70 epochs)
+Loss: EMD (w=1.0) + Focal (w=1.0)
+Device: cuda
+============================================================
+
+Epoch 001/070 | train_loss=0.2320 | val_f1=0.3815 | 40s
+  ✓ New best val_f1=0.3815 – checkpoint saved
+Epoch 002/070 | train_loss=0.1973 | val_f1=0.4812 | 28s
+  ✓ New best val_f1=0.4812 – checkpoint saved
+Epoch 003/070 | train_loss=0.1976 | val_f1=0.4715 | 28s
+Epoch 004/070 | train_loss=0.1797 | val_f1=0.5152 | 28s
+  ✓ New best val_f1=0.5152 – checkpoint saved
+Epoch 005/070 | train_loss=0.1735 | val_f1=0.4068 | 28s
+    Noise            F1=0.406
+    Zipper           F1=0.486
+    Positioning      F1=0.484
+    Banding          F1=0.459
+    Motion           F1=0.342
+    Contrast         F1=0.302
+    Distortion       F1=0.369
+Epoch 006/070 | train_loss=0.1659 | val_f1=0.4835 | 28s
+Epoch 007/070 | train_loss=0.1628 | val_f1=0.5109 | 28s
+Epoch 008/070 | train_loss=0.1465 | val_f1=0.5272 | 28s
+  ✓ New best val_f1=0.5272 – checkpoint saved
+Epoch 009/070 | train_loss=0.1495 | val_f1=0.5190 | 28s
+Epoch 010/070 | train_loss=0.1421 | val_f1=0.5542 | 28s
+    Noise            F1=0.598
+    Zipper           F1=0.431
+    Positioning      F1=0.631
+    Banding          F1=0.552
+    Motion           F1=0.497
+    Contrast         F1=0.646
+    Distortion       F1=0.523
+  ✓ New best val_f1=0.5542 – checkpoint saved
+Epoch 011/070 | train_loss=0.1417 | val_f1=0.5142 | 29s
+Epoch 012/070 | train_loss=0.1365 | val_f1=0.5196 | 28s
+Epoch 013/070 | train_loss=0.1346 | val_f1=0.4351 | 28s
+Epoch 014/070 | train_loss=0.1332 | val_f1=0.5460 | 28s
+Epoch 015/070 | train_loss=0.1200 | val_f1=0.5707 | 28s
+    Noise            F1=0.645
+    Zipper           F1=0.506
+    Positioning      F1=0.747
+    Banding          F1=0.552
+    Motion           F1=0.539
+    Contrast         F1=0.553
+    Distortion       F1=0.454
+  ✓ New best val_f1=0.5707 – checkpoint saved
+Epoch 016/070 | train_loss=0.1182 | val_f1=0.5385 | 28s
+Epoch 017/070 | train_loss=0.1104 | val_f1=0.5316 | 28s
+Epoch 018/070 | train_loss=0.1017 | val_f1=0.5588 | 28s
+Epoch 019/070 | train_loss=0.1023 | val_f1=0.5610 | 28s
+Epoch 020/070 | train_loss=0.1018 | val_f1=0.5718 | 28s
+    Noise            F1=0.649
+    Zipper           F1=0.490
+    Positioning      F1=0.679
+    Banding          F1=0.550
+    Motion           F1=0.455
+    Contrast         F1=0.670
+    Distortion       F1=0.509
+  ✓ New best val_f1=0.5718 – checkpoint saved
+Epoch 021/070 | train_loss=0.0924 | val_f1=0.5658 | 28s
+Epoch 022/070 | train_loss=0.0889 | val_f1=0.6246 | 28s
+  ✓ New best val_f1=0.6246 – checkpoint saved
+Epoch 023/070 | train_loss=0.0867 | val_f1=0.5739 | 28s
+Epoch 024/070 | train_loss=0.0903 | val_f1=0.5727 | 28s
+Epoch 025/070 | train_loss=0.0884 | val_f1=0.5967 | 28s
+    Noise            F1=0.645
+    Zipper           F1=0.579
+    Positioning      F1=0.614
+    Banding          F1=0.550
+    Motion           F1=0.612
+    Contrast         F1=0.560
+    Distortion       F1=0.617
+Epoch 026/070 | train_loss=0.0794 | val_f1=0.5896 | 28s
+Epoch 027/070 | train_loss=0.0719 | val_f1=0.5657 | 28s
+Epoch 028/070 | train_loss=0.0747 | val_f1=0.5762 | 28s
+Epoch 029/070 | train_loss=0.0756 | val_f1=0.5976 | 28s
+Epoch 030/070 | train_loss=0.0809 | val_f1=0.5785 | 28s
+    Noise            F1=0.614
+    Zipper           F1=0.522
+    Positioning      F1=0.633
+    Banding          F1=0.552
+    Motion           F1=0.561
+    Contrast         F1=0.600
+    Distortion       F1=0.568
+Epoch 031/070 | train_loss=0.0660 | val_f1=0.5854 | 28s
+Epoch 032/070 | train_loss=0.0668 | val_f1=0.5795 | 28s
+
+Early stopping at epoch 32 (no improvement for 10 epochs)
+
+✓ Training complete. Best val_f1=0.6246
+  Checkpoint: outputs/checkpoints/RUN_0002/multilabel_best.pt
+✓ Training complete (948s)
+
+[5/5] Running evaluation and computing metrics...
+✓ Loaded checkpoint: outputs/checkpoints/RUN_0002/multilabel_best.pt
+  96 samples in 'val' split
+✓ Predictions saved to results/runs/RUN_0002/predictions_val.csv (96 rows)
+Computing metrics from results/runs/RUN_0002/predictions_val.csv...
+
+✓ Metrics saved to results/runs/RUN_0002/metrics.json
+
+Global Score: 0.6695
+  Accuracy: 0.8259
+  F1: 0.6246
+  F2: 0.6160
+  Precision: 0.6669
+  Recall: 0.6139
+
+==========================================
+RUN_0002 COMPLETE
+Results: results/runs/RUN_0002/metrics.json
+==========================================
+Entraînement terminé (job 786837).

@@ -1,0 +1,10 @@
+=======================================================================
+ Job ID    : 785584
+ Nœud      : jzxh013
+ Code      : /var/spool
+ Run       : RUN_0002
+ Launcher  : scripts/run_0002.sh
+ Args      : <none>
+=======================================================================
+Données NIfTI  : OK (873 volumes dans /lustre/fswork/projects/rech/crp/ulq73oz/LISA/data)
+GPU            : NVIDIA H100 80GB HBM3, 81559 MiB

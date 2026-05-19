@@ -3,7 +3,7 @@
 ## Run Metadata
 
 - **Run ID**: RUN_0004
-- **Date**: à déterminer
+- **Date**: 2026-05-19
 - **Tasks covered**: Task 1a (Quality Assessment), Task 1b (Enhancement), Task 2 (Segmentation)
 - **Parent run (Task 1a)**: RUN_0001 — baseline indépendant DenseNet264 (aggregate 0.6887)
 - **Parent run (Task 2)**: RUN_0003 — DynUNet 12-class (mean DSC 0.362)
@@ -202,23 +202,53 @@ Voir `implementation_plan.md` pour les détails d'exécution.
 
 ## Résultats
 
-| Métrique | Valeur |
-|----------|--------|
-| Task 1a — Aggregate | en attente |
-| Task 2 — mean DSC | en attente |
-| Task 1b — FID | en attente |
-| Task 1b — PSNR | en attente |
-| Task 1b — LPIPS | en attente |
+| Métrique | Valeur | Baseline |
+|----------|--------|----------|
+| Task 1a — Aggregate | **0.1293** | 0.6887 (RUN_0001) |
+| Task 1a — Accuracy | 0.0997 | — |
+| Task 2 — mean DSC | **0.0083** | 0.362 (RUN_0003) |
+| Task 2 — mean HD95 | 66.21 | 15.99 (RUN_0003) |
+| Task 2 — mean ASSD | 37.80 | 10.51 (RUN_0003) |
+| Task 1b — PSNR | 3.48 dB | — |
+| Task 1b — L1 | 1.4028 | — |
 
-**Status : non exécuté** — en attente d'implémentation.
+**Status : REJETÉ** — Exécuté sur Jean Zay H100, job 878620, 2026-05-19. Early stopping epoch 25/90.
 
 ---
 
 ## Décision
 
 - [ ] Promu
-- [ ] Rejeté
+- [x] Rejeté
 - [ ] À retester
+
+**Décision : REJETÉ**
+
+Causes : (1) warm-start 0/102 keys matched — architecture incompatible avec DynUNet RUN_0003 ;
+(2) conflit de gradient — loss_1a domine loss_2 (ratio 2.7:1) → collapse segmentation en phase joint ;
+(3) early stopping déclenché epoch 25/90 — val_dice_2 = 0.0000 pour les 15 epochs joint.
+Toutes les hypothèses H1–H3 réfutées. H5 (risque de conflit de gradient) confirmée.
+
+→ RUN_0005 devra adresser : pondération adaptative des pertes (GradNorm ou uncertainty weighting),
+architecture compatible avec DynUNet pour le warm-start, durée de warmup accrue (≥30 epochs).
+
+---
+
+## Environnement d'exécution réel
+
+| Paramètre | Valeur |
+|-----------|--------|
+| Date | 2026-05-19 |
+| Nœud | jzxh002 (Jean Zay) |
+| GPU | NVIDIA H100 80GB HBM3 |
+| PyTorch | 2.5.0 |
+| Python | 3.12.7 |
+| CUDA | 12.4.1 |
+| Job SLURM | 878620 |
+| Durée totale | 56 min |
+| Log | outputs/logs/lisa2026_878620.out |
+| Epochs réalisés | 25/90 (early stop epoch 25) |
+| Meilleur checkpoint | warmup epoch 1, val_dice_2=0.0083 |
 
 ---
 

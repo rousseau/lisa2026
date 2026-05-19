@@ -1,0 +1,19 @@
+=======================================================================
+ Job ID    : 786098
+ Nœud      : jzxh016
+ Code      : /lustre/fswork/projects/rech/crp/ulq73oz/LISA/lisa2026
+ Run       : RUN_0002
+ Launcher  : scripts/run_0002.sh
+ Args      : <none>
+=======================================================================
+Données NIfTI  : OK (873 volumes dans /lustre/fswork/projects/rech/crp/ulq73oz/LISA/data)
+GPU            : NVIDIA H100 80GB HBM3, 81559 MiB
+
+Lancement : bash scripts/run_0002.sh 
+
+==========================================
+RUN_0002 – Multi-label EMD+Focal Launcher
+Date: Wed May 13 11:36:30 CEST 2026
+==========================================
+
+[1/5] Loading conda environment...
