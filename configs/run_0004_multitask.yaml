@@ -1,0 +1,61 @@
+# RUN_0004 – Shared Encoder Multi-task (Tasks 1a, 1b, 2)
+
+run_id: "0004"
+run_name: "multitask_shared_encoder"
+date: "2026-05-15"
+description: >
+  Single shared 3D U-Net encoder with three task-specific heads:
+  classification (Task 1a), reconstruction autoencoder on clean images (Task 1b),
+  and multi-structure segmentation (Task 2). No feature constraint (unconstrained baseline).
+
+data:
+  data_root: "/home/rousseau/Data/LISA2026"
+  bids_root: "/home/rousseau/Data/LISA2026"
+  csv_path:  "/home/rousseau/Data/LISA2026/LISA_Task1a_2026.csv"
+  split_pkl_1a: "results/splits/task1a_fixed.pkl"
+  split_pkl_2:  "results/splits/task2_fixed.pkl"
+  image_suffix: "_ciso.nii.gz"
+  label_suffix: "_LF_seg.nii.gz"
+  patch_size:   [128, 128, 128]
+  val_roi_size: [128, 128, 128]
+  train_num_samples: 1
+
+model:
+  in_channels: 1
+  filters: [32, 64, 128, 256, 320]
+  num_seg_classes: 12
+  num_artifact_tasks: 7
+  num_artifact_classes: 3
+
+training:
+  batch_size: 1
+  num_workers: 4
+  num_warmup_epochs: 10
+  num_epochs: 80
+  learning_rate: 1.0e-4
+  min_learning_rate: 1.0e-6
+  weight_decay: 1.0e-5
+  lambda_1a: 1.0
+  lambda_1b: 1.0
+  lambda_2:  1.0
+  # Optional warm-start from RUN_0003 segmentation checkpoint:
+  pretrained_checkpoint: "outputs/checkpoints/RUN_0003/task2_dynunet_best.pt"
+
+early_stopping:
+  patience: 15
+
+inference:
+  sw_batch_size: 1
+  overlap: 0.5
+  tta_flip_axes: []
+  keep_largest_component: false
+
+environment:
+  seed: 42
+  deterministic: true
+  mixed_precision: true
+
+output:
+  checkpoint_dir: "outputs/checkpoints/RUN_0004"
+  log_dir:        "outputs/logs/RUN_0004"
+  results_dir:    "results/runs/RUN_0004"
