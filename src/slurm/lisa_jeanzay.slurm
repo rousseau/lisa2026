@@ -3,13 +3,13 @@
 # Script SLURM générique — LISA 2026 sur Jean Zay (H100 SXM5 80 GB)
 #
 # Usage (depuis la racine du projet) :
-#   sbatch src/slurm/lisa_jeanzay.slurm --run 0001
-#   sbatch src/slurm/lisa_jeanzay.slurm --run 0003
-#   sbatch src/slurm/lisa_jeanzay.slurm --run 0004          ← multi-task
-#   sbatch src/slurm/lisa_jeanzay.slurm --run 0004 --smoke-test
+#   bash src/slurm/submit.sh --run 0004          ← recommandé
+#   bash src/slurm/submit.sh --run 0003
+#   bash src/slurm/submit.sh --run 0004 --smoke-test
 #
-# Pour RUN_0004, préférer le script dédié :
-#   sbatch src/slurm/run_0004_multitask.slurm
+# Lancement direct (sans run ID dans le nom du log) :
+#   sbatch src/slurm/lisa_jeanzay.slurm --run 0001
+#   sbatch src/slurm/lisa_jeanzay.slurm --run 0004          ← multi-task
 # =============================================================================
 
 #SBATCH --job-name=lisa2026

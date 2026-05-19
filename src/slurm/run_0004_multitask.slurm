@@ -5,11 +5,12 @@
 #
 # Durée estimée : ~10-15h (90 epochs warmup+joint, 436 steps/epoch, 3 tâches)
 #
-# Lancement depuis la racine du projet ($WORK/LISA/lisa2026) :
-#   sbatch src/slurm/run_0004_multitask.slurm
+# Lancement recommandé (logs nommés avec le run ID) :
+#   bash src/slurm/submit.sh --run 0004
+#   bash src/slurm/submit.sh --run 0004 --smoke-test
 #
-# Smoke test (2 steps/epoch) :
-#   sbatch src/slurm/run_0004_multitask.slurm --smoke-test
+# Lancement direct (log nommé via --job-name par défaut) :
+#   sbatch src/slurm/run_0004_multitask.slurm
 #
 # Reprise automatique en cas de timeout (signal USR1 → requeue).
 # =============================================================================
@@ -24,8 +25,8 @@
 #SBATCH --time=24:00:00
 #SBATCH --partition=gpu_p6
 #SBATCH --qos=qos_gpu_h100-t4
-#SBATCH --output=outputs/logs/RUN_0004/%x_%j.out
-#SBATCH --error=outputs/logs/RUN_0004/%x_%j.err
+#SBATCH --output=outputs/logs/%x_%j.out
+#SBATCH --error=outputs/logs/%x_%j.err
 #SBATCH --signal=USR1@120
 
 set -euo pipefail
