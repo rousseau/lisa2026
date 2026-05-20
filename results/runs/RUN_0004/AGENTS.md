@@ -203,16 +203,16 @@ Voir `implementation_plan.md` pour les détails d'exécution.
 ## Résultats
 
 | Métrique | Valeur | Baseline |
-|----------|--------|----------|
-| Task 1a — Aggregate | **0.1293** | 0.6887 (RUN_0001) |
-| Task 1a — Accuracy | 0.0997 | — |
-| Task 2 — mean DSC | **0.0083** | 0.362 (RUN_0003) |
-| Task 2 — mean HD95 | 66.21 | 15.99 (RUN_0003) |
-| Task 2 — mean ASSD | 37.80 | 10.51 (RUN_0003) |
-| Task 1b — PSNR | 3.48 dB | — |
-| Task 1b — L1 | 1.4028 | — |
+|----------|--------|---------|
+| Task 1a — Aggregate | **0.3261** | 0.6887 (RUN_0001) |
+| Task 1a — Accuracy | 0.6071 | — |
+| Task 2 — mean DSC | **0.0274** | 0.362 (RUN_0003) |
+| Task 2 — mean HD95 | 37.24 | 15.99 (RUN_0003) |
+| Task 2 — mean ASSD | 26.11 | 10.51 (RUN_0003) |
+| Task 1b — PSNR | 3.82 dB | — |
+| Task 1b — L1 | 1.2578 | — |
 
-**Status : REJETÉ** — Exécuté sur Jean Zay H100, job 878620, 2026-05-19. Early stopping epoch 25/90.
+**Status : REJETÉ (v2)** — La phase joint produit des pertes **NaN** dès le premier epoch. L'évaluation a été faite sur le meilleur checkpoint du warmup (epoch 30, val_dice_2=0.0274).
 
 ---
 
@@ -224,13 +224,18 @@ Voir `implementation_plan.md` pour les détails d'exécution.
 
 **Décision : REJETÉ**
 
-Causes : (1) warm-start 0/102 keys matched — architecture incompatible avec DynUNet RUN_0003 ;
-(2) conflit de gradient — loss_1a domine loss_2 (ratio 2.7:1) → collapse segmentation en phase joint ;
-(3) early stopping déclenché epoch 25/90 — val_dice_2 = 0.0000 pour les 15 epochs joint.
+Causes :
+(1) warm-start **46/84 keys** — **réussi** (vs 0/102 en v1) ✅
+(2) Loss calibration **OK** — weights équilibrés (0.131/0.450/0.731) ✅
+(3) **NaN dès epoch joint 1** — échec critique ❌
+(4) Warmup 30 epochs → val_dice_2=0.0274 seulement (cible 0.15) — **lourd** ⚠️
 Toutes les hypothèses H1–H3 réfutées. H5 (risque de conflit de gradient) confirmée.
 
-→ RUN_0005 devra adresser : pondération adaptative des pertes (GradNorm ou uncertainty weighting),
-architecture compatible avec DynUNet pour le warm-start, durée de warmup accrue (≥30 epochs).
+→ RUN_0005 devra adresser :
+- **Gradient clipping** obligatoire (`clip_grad_norm_`)
+- **Têtes 1a/1b initialisées séparément** (pas aléatoire)
+- **Warmup ≥ 50 epochs** ou critère DSC ≥ 0.10 minimum
+- **Gradient clipping + LR réduit** pour la phase joint
 
 ---
 

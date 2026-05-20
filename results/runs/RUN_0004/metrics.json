@@ -1,11 +1,11 @@
 {
   "run_id": "0004",
-  "source": "Jean Zay H100 job 878620 — 2026-05-19",
-  "note": "Per-artifact and per-class breakdowns are available on Jean Zay at results/runs/RUN_0004/metrics.json; only the summary is stored here.",
+  "source": "Jean Zay H100 job 887047 — 2026-05-19",
+  "note": "Jean Zay v2 (DynUNetMultiHeadModel, loss normalization, 30-epoch warmup). Joint phase collapsed to NaN from epoch 1. Evaluation on warmup epoch 30 checkpoint (val_dice_2=0.0274).",
   "task1a": {
     "global": {
-      "aggregate": 0.1293,
-      "accuracy": 0.0997,
+      "aggregate": 0.3261,
+      "accuracy": 0.6071,
       "f1_macro": null,
       "f2_macro": null,
       "precision_macro": null,
@@ -14,19 +14,19 @@
     "per_task": null
   },
   "task1b": {
-    "psnr": 3.48,
-    "l1": 1.4028,
+    "psnr": 3.82,
+    "l1": 1.2578,
     "fid": null,
     "lpips": null,
     "n_subjects": 10
   },
   "task2": {
     "global": {
-      "mean_dsc": 0.0083,
-      "mean_hd95": 66.21,
+      "mean_dsc": 0.0274,
+      "mean_hd95": 37.24,
       "mean_hd": null,
       "mean_rve": null,
-      "mean_assd": 37.8,
+      "mean_assd": 26.11,
       "n_subjects": 12,
       "n_classes_eval": 11
     },

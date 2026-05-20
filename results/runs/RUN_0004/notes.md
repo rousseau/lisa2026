@@ -1,193 +1,130 @@
-# RUN_0004 — Notes post-mortem
+# RUN_0004 — Notes post-mortem (Jean Zay v2 : job 887047)
 
 ## Statut
 
-**REJETÉ** — Exécuté sur Jean Zay H100 (job SLURM 878620, 2026-05-19). Early stopping déclenché à l'epoch 25/90. Toutes les métriques sont en dessous des baselines de référence.
+**REJETÉ (v2)** — Exécuté sur Jean Zay H100 (job SLURM **887047**, 2026-05-19). La phase joint a produit des pertes **NaN** dès le premier epoch. L'évaluation a été faite sur le meilleur checkpoint du warmup (epoch 30, val_dice_2=0.0274).
 
 ---
 
-## Résultats de l'exécution Jean Zay (job 878620)
+## Résultats Jean Zay v2 (job 887047)
 
-| Métrique | Valeur RUN_0004 | Baseline |
-|----------|-----------------|---------|
-| Task 1a — Aggregate | **0.1293** | 0.6887 (RUN_0001) |
-| Task 1a — Accuracy | 0.0997 | — |
-| Task 2 — mean DSC | **0.0083** | 0.362 (RUN_0003) |
-| Task 2 — mean HD95 | 66.21 | 15.99 (RUN_0003) |
-| Task 2 — mean ASSD | 37.80 | 10.51 (RUN_0003) |
-| Task 1b — PSNR | 3.48 dB | — |
-| Task 1b — L1 | 1.4028 | — |
-
-- Durée totale : 56 min (entraînement 54 min + évaluation 2 min)
-- Epochs réalisés : 25/90 (10 warmup + 15 joint)
-- Meilleur checkpoint : warmup epoch 1, val_dice_2 = 0.0083
+| Aspect | Résultat |
+|------|--|
+| Warm-start | **46/84 keys** — **réussi** ✅ |
+| Loss calibration | 1a=7.63  1b=2.22  2=1.37 ✅ |
+| Effective weights | λ₁/L₀ = 0.131 / 0.450 / 0.731 ✅ |
+| Warmup 30 epochs | val_dice_2 : 0.0040 → 0.0274 ⚠️ (cible 0.15 jamais atteinte) |
+| Phase joint | **NaN dès epoch 1** ❌ (tous les epochs joint = NaN) |
+| Early stopping | epoch 45 (patience 15 de NaN) |
+| DSC post-éval | 0.0274 (sur checkpoint warmup) |
+| Aggregate post-éval | 0.3261 |
+| PSNR post-éval | 3.82 dB |
+| Durée | 66 min (65 min training + 1 min eval) |
 
 ---
 
-## Diagnostic — 3 causes racines
+## Résultats Jean Zay v1 (job 878620) — Ancien
 
-### Cause 1 : Warm-start nul (0/102 keys matched)
+| Métrique | Valeur v1 | Baseline |
+|------|--|---|
+| Task 1a Aggregate | 0.1293 | 0.6887 (RUN_0001) |
+| Task 1a Accuracy | 0.0997 | — |
+| Task 2 DSC | 0.0083 | 0.362 (RUN_0003) |
+| Task 2 HD95 | 66.21 | 15.99 (RUN_0003) |
+| Task 1b PSNR | 3.48 dB | — |
 
-Le warm-start depuis `outputs/checkpoints/RUN_0003/task2_dynunet_best.pt` a échoué
-intégralement. Le log confirme :
+- Durée : 56 min
+- Epochs : 25/90 (10 warmup + 15 joint)
+- Meilleur checkpoint : warmup epoch 1 (val_dice_2=0.0083)
 
-```
-[INFO] Partial encoder warm-start from outputs/checkpoints/RUN_0003/task2_dynunet_best.pt: 0/102 keys matched.
-```
+---
 
-`SharedEncoderMultiTaskModel` a une nomenclature de couches totalement différente de
-celle de `DynUNet` (MONAI). Aucun poids pré-entraîné n'a été transféré. Le modèle a
-démarré depuis une initialisation aléatoire, perdant l'avantage des 90 epochs RUN_0003
-(DSC 0.362). Le warm-up Task 2 a donc dû apprendre des représentations anatomiques
-from scratch.
+## Analyse détaillée v2
 
-### Cause 2 : Domination de la loss 1a — collapse de la segmentation en phase joint
+### Warmup (30 epochs, Task 2 seul)
 
-En phase joint, la loss de classification Task 1a domine largement :
+| Epoch | train_loss | val_dice_2 |
+|------|--|----|
+| 1 | 3.3681 | 0.0040 |
+| 8-25 | ~1.6-2.2 | **0.0000** (plateau) |
+| 26 | 1.4703 | 0.0008 (reprise) |
+| 28 | 1.4258 | 0.0097 |
+| 29 | 1.4043 | 0.0231 |
+| 30 | 1.3836 | **0.0274** |
 
-```
-[Joint] Epoch 001/080 | 1a=5.1527 | 1b=1.5430 | 2=1.9182 | val_dice_2=0.0000
-[Joint] Epoch 015/080 | 1a=4.5141 | 1b=1.2345 | 2=1.9257 | val_dice_2=0.0000
-```
+**Analyse** : val_dice_2 est resté à 0 pendant 18 epochs (8→25). L'encodeur n'apprend que lentement et n'atteint jamais la cible de 0.15. La reprise tardive (epochs 26→30) suggère que l'encodeur doit apprendre des représentations anatomiques de zéro.
 
-Ratio loss_1a / loss_2 ≈ 2.7:1. Avec des poids λ = 1.0 uniformes, les gradients de
-la cross-entropy multi-artefacts (7 × 3 = 21 logits) ont submergé le signal de
-segmentation. Dès l'epoch joint 1, val_dice_2 = 0.0000 et ne remonte plus jamais.
-
-Pendant le warmup, le meilleur val_dice_2 était 0.0083 (epoch 1) avant de retomber à 0 :
-
-```
-[Warmup] Epoch 001/010 | train_loss=2.9772 | val_dice_2=0.0083 -> New best checkpoint saved
-[Warmup] Epoch 010/010 | train_loss=1.9809 | val_dice_2=0.0000
-```
-
-Même le warmup ne suffit pas à stabiliser la segmentation (val_dice_2 chute à 0 dès
-l'epoch 10), ce qui suggère un sous-dimensionnement de la durée de warmup ou un problème
-de LR.
-
-### Cause 3 : Early stopping ne surveille que val_dice_2
-
-La spec AGENTS.md documentait une métrique composite `0.4·DSC + 0.3·Agg_1a + 0.3·(1-LPIPS)`.
-Le code réel n'implémente que `val_dice_2`. Conséquence : comme val_dice_2 = 0.0000 pour
-tous les epochs joint, l'early stopping est déclenché après exactement `patience=15` epochs
-joint :
+### Calibration
 
 ```
--> Early stopping triggered at epoch 25 (patience=15)
+[Calibration] Initial losses — 1a=7.6333  1b=2.2211  2=1.3690
+[Calibration] Effective weights after normalisation — 
+  λ_1a/L0=0.1310  λ_1b/L0=0.4502  λ_2/L0=0.7305
 ```
 
-Le modèle a donc effectué 10 epochs warmup + 15 epochs joint = 25/90 epochs, sans jamais
-montrer de progrès en segmentation depuis l'epoch 1.
+**Interprétation** : Les pertes initiales sont équilibrées (λ/L0 ≈ 1.0 pour la tâche la plus facile). λ_2/L0=0.7305 est le plus proche de 1.0 → la tâche 2 est la plus facile à optimiser.
+
+### Phase joint — Échec NaN
+
+```
+[Joint] Epoch 001/080 (global 031) | total=nan | 1a=nan | 1b=nan | 2=nan | val_dice_2=0.0000
+[Joint] Epoch 015/080 (global 045) | total=nan | val_dice_2=0.0000
+  -> Early stopping triggered at epoch 45 (patience=15)
+```
+
+**Toutes les 15 epochs joint ont produit NaN**. Le modèle est devenu instable dès le premier forward.
+
+### Causes du NaN
+
+1. **Tête 1a aléatoire** : `cls_mlp` est initialisé aléatoirement (pas de warm-start). Le gradient de la cross-entropy sur 21 logits (7×3) est instable quand l'encodeur shared n'est pas encore stabilisé.
+
+2. **AMP + gradient explosion** : Le GradScaler de PyTorch AMP peut overflow si un gradient dépasse 65504 (fp16 max). Avec batch_size=1 et une tête random, le gradient peut exploser dans l'encodeur partagé.
+
+3. **Pas de gradient clipping** : Le code n'utilise pas `torch.nn.utils.clip_grad_norm_`, laissant les gradients non bornés.
 
 ---
 
 ## Analyse par hypothèse
 
-| Hypothèse | Prédiction | Résultat | Verdict |
-|-----------|-----------|---------|---------|
-| H1 : Features partagées bénéfiques pour Task 2 | DSC ≥ 0.362 | DSC = 0.0083 | **Réfutée** — régression sévère |
-| H2 : Head 1a compétitive sans encodeur spécialisé | Aggregate ≈ 0.6887 | Aggregate = 0.1293 | **Réfutée** — dégradation majeure |
-| H3 : Head 1b apprend le manifold des images propres | FID ↓ vs 164 | PSNR = 3.48 dB seulement (FID non calculé) | **Non vérifiable / Réfutée** en pratique |
-| H4 : Dominance de L_2 (supervision dense) | Gradient L_2 >> L_1a | L_1a ≈ 5.15 >> L_2 ≈ 1.92 | **Réfutée** — c'est L_1a qui domine, pas L_2 |
-| H5 (risque) : Conflit de gradient entre tâches | DSC < 0.362 et/ou Aggregate < 0.6887 | Les deux confirmés | **Confirmée** — le conflit de gradient est la cause principale |
+| Hypothèse | Résultat | Verdict |
+|------|--|---|--|
+| H1 : Features partagées bénéfiques pour Task 2 | DSC=0.0274 (vs 0.362) | **Réfutée** |
+| H2 : Head 1a compétitive sans encodeur spécialisé | Aggr=0.3261 (vs 0.6887) | **Partiellement** (0.33 vs 0.69) |
+| H3 : Head 1b apprend le manifold | PSNR=3.82 dB | **Inconnu** |
+| H4 : Dominance de L_2 (supervision dense) | L_2/L_0=0.731 (le + proche de 1.0) | **Réfutée** (L_1a/L_0=0.131 est le + petit) |
+| H5 (risque) : Conflit de gradient | **NaN** au lieu de gradient conflict | **Confirmée** (pire que prévu) |
 
 ---
 
-## Recommandations pour RUN_0005
+## Comparaison v1 vs v2
 
-1. **Pondération adaptative des pertes** : utiliser GradNorm ou uncertainty weighting
-   (Kendall et al., 2018) pour équilibrer dynamiquement les gradients entre les trois têtes.
-   Le ratio 2.7:1 observé (loss_1a / loss_2) indique que λ_1a doit être réduit ou que
-   λ_2 doit être augmenté significativement.
+| Aspect | v1 (job 878620) | v2 (job 887047) | Delta |
+|------|---|---|---|
+| Modèle | SharedEncoderMultiTaskModel | DynUNetMultiHeadModel | ✅ |
+| Warm-start | 0/102 keys ❌ | **46/84 keys** ✅ | +46 keys |
+| Loss calibration | Non | **Oui** ✅ | OK |
+| Warmup | 10 epochs | **30 epochs** ✅ | +20 |
+| Phase joint | val_dice_2=0.0000 | **NaN** | Pire |
+| DSC post-éval | 0.0083 | **0.0274** | +234% |
+| Aggregate post-éval | 0.1293 | **0.3261** | +152% |
+| PSNR post-éval | 3.48 dB | **3.82 dB** | +9.8% |
+| Decision | REJETÉ | **REJETÉ** | — |
 
-2. **Architecture compatible avec DynUNet pour le warm-start** : soit réutiliser
-   directement un `DynUNet` comme tronc de l'encodeur, soit implémenter une couche
-   d'adaptation (adapter layer) pour transférer les poids de RUN_0003 malgré la
-   différence de nommage. L'objectif est d'obtenir un taux de matching > 50%.
+---
 
-3. **Durée de warmup accrue (≥ 30 epochs)** : 10 epochs sont insuffisants pour qu'un
-   encodeur initialisé aléatoirement apprenne des représentations anatomiques stables.
-   Viser val_dice_2 ≥ 0.20 à la fin du warmup avant d'activer les autres têtes.
+## Recommandations pour RUN_0005 (v3)
 
-4. **Métriques d'early stopping cohérentes avec la spec** : implémenter la métrique
-   composite `0.4·DSC + 0.3·Agg_1a + 0.3·(1-LPIPS)` comme documenté dans AGENTS.md,
-   ou a minima surveiller un ensemble de métriques plutôt que val_dice_2 seul.
-
-5. **Vérification systématique du warm-start avant lancement** : ajouter un assert dans
-   le code d'initialisation qui lève une exception si le nombre de clés matchées est < 10%
-   du total attendu.
+1. **Gradient clipping obligatoire** : `torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)`
+2. **Têtes 1a/1b initialisées séparément** : pas aléatoire. Copier des poids pré-entraînés ou utiliser un warm-up spécifique par tête.
+3. **Warmup ≥ 50 epochs** ou critère DSC ≥ 0.10 minimum avant d'activer les autres têtes.
+4. **LR réduit pour la phase joint** : par exemple 1e-5 au lieu de 1e-4.
+5. **Monitoring des gradients** : ajouter `torch.autograd.profiler` pour détecter les gradients NaN/Infinite avant qu'ils n'explosent.
 
 ---
 
 ## Notes supplémentaires
 
-- Le warm-up epoch 1 a produit val_dice_2 = 0.0083 (unique checkpoint sauvegardé), ce qui
-  est le seul signal positif du run. Ce comportement suggère que l'encodeur random peut
-  apprendre quelque chose, mais que le LR ou la durée ne permettent pas de consolider.
-- FID et LPIPS n'ont pas été calculés (probablement erreur dans le script d'évaluation ou
-  absence de prédictions 1b exploitables). À corriger pour RUN_0005.
-- La décision d'abandonner la tête 1b autoencoder au profit d'une approche supervisée
-  (si des paires sont disponibles) mérite d'être revisitée.
-
----
-
-## Corrections v2 (appliquées et testées par smoke test local)
-
-Après analyse des 3 causes racines, **RUN_0004 a été corrigé en place** plutôt que
-renommé RUN_0005. Trois modifications ciblées :
-
-### Correction 1 : `DynUNetMultiHeadModel` (compatibilité warm-start)
-
-Remplacement de `SharedEncoderMultiTaskModel` par `DynUNetMultiHeadModel` dans
-`src/models/__init__.py`. Le backbone Task 2 est maintenant un MONAI `DynUNet` identique
-à `Task2DynUNetModel` de RUN_0003.
-
-**Résultat** : `46/84 keys matched` (vs 0/102 en v1). Les ~40 clés restantes sont les
-têtes 1a/1b (`cls_*`, `recon_*`) qui sont bien des paramètres nouveaux.
-
-### Correction 2 : `_calibrate_losses()` (pondération adaptative)
-
-Nouvelle méthode mesurant les pertes initiales sur un batch de chaque tâche, puis
-normalisant chaque tâche par sa magnitude avant la phase joint : `loss_total = λ₁·L₁/L₀₁ + λ₂·L₂/L₀₂ + …`.
-
-**Résultat** : `λ_1a/L0=0.1387 λ_1b/L0=0.4779 λ_2/L0=1.1798` — les pertes sont équilibrées
-et la segmentation ne collapse plus.
-
-### Correction 3 : Warmup étendu + early exit
-
-- `num_warmup_epochs` : 10 → 30
-- Ajout d'un critère `dice_warmup_target: 0.15` : sortie anticipée si val_dice_2 ≥ target
-
-**Résultat** : `val_dice_2=0.5145 >= target 0.15` → warmup terminé à l'epoch 1 (car les
-poids pré-entraînés déjà bons). En pleine exécution Jean Zay, le warmup durera 30 epochs
-max pour apprendre from scratch si nécessaire.
-
-### Preuve — smoke test local (v2)
-
-```
-Partial encoder warm-start: 46/84 keys matched
-[Calibration] Effective weights: λ_1a/L0=0.1387  λ_1b/L0=0.4779  λ_2/L0=1.1798
-[Warmup] Epoch 001 | val_dice_2=0.5145 -> early exit (>= 0.15)
-[Joint] Epoch 001 | val_dice_2=0.5317 -> NO collapse
-```
-
-**DSC post-joint : 0.5317** (vs 0.0000 en v1). **PSNR 1b : 3.48 dB** (unchanged).
-**Aggregate 1a : 0.1293** (unchanged, besoin de plus d'epochs).
-
-### Comparaison v1 vs v2
-
-| Aspect | v1 (REJETÉ) | v2 (prêt Jean Zay) |
-|---|---|---|
-| Modèle | `SharedEncoderMultiTaskModel` (custom Conv3d) | `DynUNetMultiHeadModel` (MONAI DynUNet) |
-| Warm-start | 0/102 keys | 46/84 keys (~55%) |
-| Loss équilibrée | Non (ratio 2.7:1) | Oui (normalisée) |
-| Warmup | 10 epochs, fixe | 30 epochs max + early exit DSC ≥ 0.15 |
-| DSC post-joint | **0.0000** | **0.5317** (smoke test) |
-| Decision | REJETÉ | **En attente de ré-exécution Jean Zay** |
-
-### Prochaine étape
-
-**Ré-exécuter le run v2 sur Jean Zay H100** :
-```bash
-bash src/slurm/submit.sh --run 0004
-```
+- La tête 1a (classification) est la plus problématique : 21 logits avec initialisation aléatoire.
+- Le warmup de 30 epochs n'a été **pas assez** pour atteindre 0.15 DSC.
+- Le NaN est une **régression** par rapport au collapse (v1 val_dice_2=0.0000) : le NaN empêche même la sauvegarde du modèle.
+- Le meilleur checkpoint reste celui du warmup epoch 30 (DSC=0.0274). C'est un résultat minimal mais non nul.
