@@ -379,6 +379,54 @@ class DynUNetMultiHeadModel(nn.Module):
         self.recon_up1 = UpBlock3d(f[1], f[0], f[0])  # 64+32   → 32
         self.recon_out = nn.Conv3d(f[0], 1, kernel_size=1)
 
+        # ── Initialisation explicite des têtes nouvelles ──────────────────────
+        # Les poids par défaut (Kaiming) peuvent produire des activations de
+        # grande magnitude dès les premiers forward passes, causant des NaN avec
+        # AMP (overflow fp16 > 65504).  On force de petits poids pour cls_mlp et
+        # une sortie reconstruction proche de zéro.
+        self._init_new_heads()
+
+    # ── Head initialisation ─────────────────────────────────────────────────────
+
+    def _init_new_heads(self) -> None:
+        """Initialise cls_mlp et recon_* avec de petits poids.
+
+        Objectif : éviter l'overflow AMP (fp16 > 65504) lors des premiers
+        forward passes des têtes aléatoires sur l'encodeur pré-entraîné.
+
+        * cls_mlp  : Xavier uniform avec gain=0.01 → logits initiaux ≈ 0.
+        * recon_up*: Kaiming normal (fan_out, leaky_relu) + biais zéro.
+        * recon_out: N(0, 1e-3) → reconstruction initiale ≈ 0 (pas d'overflow L1).
+        """
+        # Task 1a — très petits logits initiaux
+        for m in self.cls_mlp.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight, gain=0.01)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+
+        # Task 1b — décodeur : Kaiming standard, biais zéro
+        for block in [self.recon_up4, self.recon_up3, self.recon_up2, self.recon_up1]:
+            for m in block.modules():
+                if isinstance(m, nn.Conv3d):
+                    nn.init.kaiming_normal_(
+                        m.weight, mode="fan_out", nonlinearity="leaky_relu"
+                    )
+                    if m.bias is not None:
+                        nn.init.zeros_(m.bias)
+                elif isinstance(m, nn.ConvTranspose3d):
+                    nn.init.kaiming_normal_(
+                        m.weight, mode="fan_in", nonlinearity="leaky_relu"
+                    )
+                    if m.bias is not None:
+                        nn.init.zeros_(m.bias)
+
+        # Couche de sortie reconstruction : variance très faible
+        # → recon ≈ 0 au départ → L1(recon, target) ≈ target  (fini, pas d'overflow)
+        nn.init.normal_(self.recon_out.weight, mean=0.0, std=1e-3)
+        if self.recon_out.bias is not None:
+            nn.init.zeros_(self.recon_out.bias)
+
     # ── Shared encoder ──────────────────────────────────────────────────────────
 
     def _encode(self, x: torch.Tensor):

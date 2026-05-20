@@ -173,9 +173,9 @@ class MultiTaskTrainer:
         self.best_val_dice = -1.0
         self.patience_counter = 0
 
-        # ── Warmup early-exit target ──────────────────────────────────────────
+        # ── Warmup early-exit target ────────────────────────────────────────
         self.dice_warmup_target = float(
-            config["training"].get("dice_warmup_target", 0.15)
+            config["training"].get("dice_warmup_target", 0.10)
         )
 
         # ── Loss normalization scales (calibrated before joint phase) ─────────
@@ -183,13 +183,25 @@ class MultiTaskTrainer:
         self.loss_scale_1b = 1.0
         self.loss_scale_2 = 1.0
 
+        # ── Gradient clipping ──────────────────────────────────────────────
+        self.max_grad_norm = float(config["training"].get("max_grad_norm", 1.0))
+
+        # ── Joint phase LR (lower than warmup to stabilise NaN-prone heads) ───
+        self.joint_lr = float(config["training"].get("joint_learning_rate", 1.0e-5))
+
+        # ── Head warm-up epochs (encoder frozen, 1a + 1b seulement) ────────
+        self.num_head_warmup_epochs = int(
+            config["training"].get("num_head_warmup_epochs", 5)
+        )
+
         print(f"Device : {self.device} | AMP : {self.use_amp}")
         print(
             f"Warm-up: {self.num_warmup_epochs} epochs "
             f"(early exit if DSC≥{self.dice_warmup_target:.2f}) | "
-            f"Joint: {self.num_epochs} epochs | "
+            f"Head warm-up: {self.num_head_warmup_epochs} epochs | "
+            f"Joint: {self.num_epochs} epochs @ lr={self.joint_lr:.1e} | "
             f"λ=(1a={self.lambda_1a}, 1b={self.lambda_1b}, 2={self.lambda_2}) "
-            f"[loss-normalized]"
+            f"[loss-normalized, grad_clip={self.max_grad_norm}]"
         )
 
     # ─── Loss helpers ──────────────────────────────────────────────────────────
@@ -278,7 +290,75 @@ class MultiTaskTrainer:
         )
         return s1a, s1b, s2
 
-    # ─── Training phases ───────────────────────────────────────────────────────
+    def train_one_epoch_head_warmup(self) -> dict:
+        """Head warm-up : entraîne seulement les têtes 1a et 1b, encodeur gelé.
+
+        L'encodeur DynUNet (model.model.*) est gelé.  Seuls cls_gap, cls_mlp,
+        recon_up*, recon_out sont mis à jour.  Ceci permet aux têtes
+        aléatoires de converger vers des sorties raisonnables avant le joint
+        training, prévenant l'explosion de gradients liée aux logits initiaux.
+
+        Returns:
+            Dict avec train_loss_1a, train_loss_1b.
+        """
+        # Geler l'encodeur backbone
+        for param in self.model.model.parameters():
+            param.requires_grad = False
+        self.model.train()
+
+        n1a = len(self.train_loader_1a)
+        n1b = len(self.train_loader_1b)
+        steps = min(max(n1a, n1b), 2) if self.smoke_test else max(n1a, n1b)
+        iter_1a = itertools.cycle(self.train_loader_1a)
+        iter_1b = itertools.cycle(self.train_loader_1b)
+
+        total_l_1a = 0.0
+        total_l_1b = 0.0
+        nan_steps = 0
+
+        for _step in tqdm(range(steps), desc="HeadWarmup-Train"):
+            b1a = next(iter_1a)
+            b1b = next(iter_1b)
+            img_1a = b1a["img"].to(self.device)
+            labels_1a = b1a["labels"].to(self.device)
+            img_1b = b1b["img"].to(self.device)
+
+            self.optimizer.zero_grad(set_to_none=True)
+
+            with torch.amp.autocast("cuda", enabled=self.use_amp):
+                l_1a = self._loss_1a(self.model.forward_task1a(img_1a), labels_1a)
+                l_1b = self._loss_1b(self.model.forward_task1b(img_1b), img_1b)
+                loss = self.lambda_1a * l_1a + self.lambda_1b * l_1b
+
+            if not torch.isfinite(loss):
+                self.optimizer.zero_grad(set_to_none=True)
+                nan_steps += 1
+                continue
+
+            self.scaler.scale(loss).backward()
+            self.scaler.unscale_(self.optimizer)
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+
+            total_l_1a += float(l_1a.item())
+            total_l_1b += float(l_1b.item())
+
+            if self.smoke_test and _step >= 1:
+                break
+
+        # Dégeler l'encodeur pour la suite
+        for param in self.model.model.parameters():
+            param.requires_grad = True
+
+        valid = max(1, steps - nan_steps)
+        return {
+            "train_loss_1a": total_l_1a / valid,
+            "train_loss_1b": total_l_1b / valid,
+            "nan_steps": nan_steps,
+        }
+
+    # ─── Training phases ────────────────────────────────────────────────────────────────
 
     def train_one_epoch_warmup(self) -> dict:
         """Warm-up: only the Task 2 segmentation head is active.
@@ -302,6 +382,8 @@ class MultiTaskTrainer:
                 loss = self.seg_loss_fn(seg_logits, labels)
 
             self.scaler.scale(loss).backward()
+            self.scaler.unscale_(self.optimizer)
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
             self.scaler.step(self.optimizer)
             self.scaler.update()
 
@@ -346,6 +428,7 @@ class MultiTaskTrainer:
         total_l_1a = 0.0
         total_l_1b = 0.0
         total_l_2 = 0.0
+        nan_steps = 0
 
         for _step in tqdm(range(steps), desc="Joint-Train"):
             batch_1a = next(iter_1a)
@@ -379,7 +462,17 @@ class MultiTaskTrainer:
                     + self.lambda_2 * l_2 / self.loss_scale_2
                 )
 
+            # ── NaN / Inf guard ────────────────────────────────────────────────
+            if not torch.isfinite(loss):
+                # Skip this step : do NOT call backward (NaN gradients would
+                # corrupt model weights permanently).
+                self.optimizer.zero_grad(set_to_none=True)
+                nan_steps += 1
+                continue
+
             self.scaler.scale(loss).backward()
+            self.scaler.unscale_(self.optimizer)
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
             self.scaler.step(self.optimizer)
             self.scaler.update()
 
@@ -388,12 +481,18 @@ class MultiTaskTrainer:
             total_l_1b += float(l_1b.item())
             total_l_2 += float(l_2.item())
 
-        denom = max(1, steps)
+        valid_steps = max(1, steps - nan_steps)
+        if nan_steps > 0:
+            print(
+                f"  [WARNING] {nan_steps}/{steps} steps had NaN/Inf loss "
+                f"and were skipped (grad clip={self.max_grad_norm})."
+            )
         return {
-            "train_loss_total": total_loss / denom,
-            "train_loss_1a": total_l_1a / denom,
-            "train_loss_1b": total_l_1b / denom,
-            "train_loss_2": total_l_2 / denom,
+            "train_loss_total": total_loss / valid_steps,
+            "train_loss_1a": total_l_1a / valid_steps,
+            "train_loss_1b": total_l_1b / valid_steps,
+            "train_loss_2": total_l_2 / valid_steps,
+            "nan_steps": nan_steps,
         }
 
     @torch.no_grad()
@@ -509,10 +608,13 @@ class MultiTaskTrainer:
             "device": self.device,
             "num_warmup_epochs": self.num_warmup_epochs,
             "dice_warmup_target": self.dice_warmup_target,
+            "num_head_warmup_epochs": self.num_head_warmup_epochs,
             "num_epochs": self.num_epochs,
             "num_seg_classes": int(self.config["model"]["num_seg_classes"]),
             "filters": list(self.config["model"].get("filters", [])),
             "loss_normalization": True,
+            "max_grad_norm": self.max_grad_norm,
+            "joint_learning_rate": self.joint_lr,
             "loss_scale_1a": None,  # filled after calibration
             "loss_scale_1b": None,
             "loss_scale_2": None,
@@ -568,17 +670,54 @@ class MultiTaskTrainer:
             if self.smoke_test:
                 break
 
-        # ════════════════════════════════════════════════════════════════════
-        # Phase 2 — Joint training (all 3 tasks)
-        # ════════════════════════════════════════════════════════════════════
-        # ── Calibrate loss scales before joint phase ──────────────────────────
+        # ════════════════════════════════════════════════════════════════
+        # Phase 2 — Head warm-up (têtes 1a + 1b, encodeur gelé)
+        # ════════════════════════════════════════════════════════════════
+        if self.num_head_warmup_epochs > 0 and not self.smoke_test:
+            print(
+                f"\n{'=' * 60}\n"
+                f"Head warm-up phase ({self.num_head_warmup_epochs} epochs) "
+                f"— têtes 1a + 1b, encodeur gelé\n"
+                f"{'=' * 60}"
+            )
+            for epoch in range(self.num_head_warmup_epochs):
+                hw_metrics = self.train_one_epoch_head_warmup()
+                row = {
+                    "epoch": self.num_warmup_epochs + epoch + 1,
+                    "phase": "head_warmup",
+                    **hw_metrics,
+                }
+                history.append(row)
+                print(
+                    f"[HeadWarmup] Epoch {epoch + 1:03d}/{self.num_head_warmup_epochs:03d} "
+                    f"| loss_1a={hw_metrics['train_loss_1a']:.4f} "
+                    f"| loss_1b={hw_metrics['train_loss_1b']:.4f} "
+                    f"| nan_steps={hw_metrics['nan_steps']}"
+                )
+
+        # ════════════════════════════════════════════════════════════════
+        # Phase 3 — Joint training (all 3 tasks)
+        # ════════════════════════════════════════════════════════════════
+        # ── Calibrate loss scales before joint phase ─────────────────────────────
         self.loss_scale_1a, self.loss_scale_1b, self.loss_scale_2 = (
             self._calibrate_losses()
         )
-        # Back-fill scales in run_meta for history logging
         history[0]["loss_scale_1a"] = self.loss_scale_1a
         history[0]["loss_scale_1b"] = self.loss_scale_1b
         history[0]["loss_scale_2"] = self.loss_scale_2
+
+        # ── Reset LR for joint phase (lower to prevent NaN on fresh heads) ───
+        print(
+            f"[Joint setup] Resetting LR to {self.joint_lr:.2e} "
+            f"(warmup LR was {self.optimizer.param_groups[0]['lr']:.2e})."
+        )
+        for pg in self.optimizer.param_groups:
+            pg["lr"] = self.joint_lr
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer,
+            T_max=max(1, self.num_epochs),
+            eta_min=float(self.config["training"].get("min_learning_rate", 1.0e-6)),
+        )
 
         print(
             f"\n{'=' * 60}\n"
@@ -589,7 +728,9 @@ class MultiTaskTrainer:
             train_metrics = self.train_one_epoch_joint()
             val_metrics = self.validate()
 
-            global_epoch = self.num_warmup_epochs + epoch + 1
+            global_epoch = (
+                self.num_warmup_epochs + self.num_head_warmup_epochs + epoch + 1
+            )
             row = {
                 "epoch": global_epoch,
                 "phase": "joint",

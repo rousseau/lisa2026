@@ -30,12 +30,15 @@ model:
 training:
   batch_size: 1
   num_workers: 4
-  num_warmup_epochs: 30
-  dice_warmup_target: 0.15
+  num_warmup_epochs: 50
+  dice_warmup_target: 0.10
+  num_head_warmup_epochs: 5
   num_epochs: 80
   learning_rate: 1.0e-4
   min_learning_rate: 1.0e-6
   weight_decay: 1.0e-5
+  joint_learning_rate: 1.0e-5
+  max_grad_norm: 1.0
   lambda_1a: 1.0
   lambda_1b: 1.0
   lambda_2: 1.0

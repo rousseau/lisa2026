@@ -1,0 +1,153 @@
+=======================================================================
+  LISA 2026 — RUN_0004 Multi-task
+  Job         : 887047
+  Nœud        : jzxh027
+  Projet      : /lustre/fswork/projects/rech/crp/ulq73oz/LISA/lisa2026
+  Données     : /lustre/fswork/projects/rech/crp/ulq73oz/LISA/data
+  Smoke test  : non
+  Début       : Tue May 19 17:25:45 CEST 2026
+=======================================================================
+  Python  : Python 3.12.7
+  PyTorch : 2.5.0
+  MONAI   : 1.3.2
+  GPU     : NVIDIA H100 80GB HBM3, 81559 MiB
+  Volumes _ciso.nii.gz : 69
+
+════════════════════════════════════════
+ Phase 1/2 — Entraînement
+════════════════════════════════════════
+
+[LISA 2026] Training
+  Run    : 0004
+  Task   : 1a+1b+2
+  Module : src.train_multitask
+  Config : configs/run_0004_multitask.yaml
+
+============================================================
+  Module : src.train_multitask
+  Config : configs/run_0004_multitask.yaml
+============================================================
+
+  $ /lustre/fshomisc/sup/pub/anaconda-py3/h100/2024.06/envs/pytorch-gpu-2.5.0+py3.12.7/bin/python3 -m src.train_multitask --config configs/run_0004_multitask.yaml
+Task 1a : train=436, val=96
+Task 1b : train=25, val=10
+Task 2  : train=48,  val=12
+Device : cuda | AMP : True
+Warm-up: 30 epochs (early exit if DSC≥0.15) | Joint: 80 epochs | λ=(1a=1.0, 1b=1.0, 2=1.0) [loss-normalized]
+
+============================================================
+Warm-up phase (30 epochs) — Task 2 only
+============================================================
+[Warmup] Epoch 001/030 | train_loss=3.3681 | val_dice_2=0.0040 | val_loss_1a=7.4019 | val_loss_1b=1.2449
+  -> New best checkpoint saved (warmup, val_dice_2=0.0040)
+[Warmup] Epoch 002/030 | train_loss=2.7024 | val_dice_2=0.0024 | val_loss_1a=7.4125 | val_loss_1b=1.2425
+[Warmup] Epoch 003/030 | train_loss=2.5276 | val_dice_2=0.0005 | val_loss_1a=7.4094 | val_loss_1b=1.2353
+[Warmup] Epoch 004/030 | train_loss=2.4372 | val_dice_2=0.0009 | val_loss_1a=7.4074 | val_loss_1b=1.2343
+[Warmup] Epoch 005/030 | train_loss=2.3608 | val_dice_2=0.0006 | val_loss_1a=7.4149 | val_loss_1b=1.2356
+[Warmup] Epoch 006/030 | train_loss=2.2865 | val_dice_2=0.0003 | val_loss_1a=7.4065 | val_loss_1b=1.2374
+[Warmup] Epoch 007/030 | train_loss=2.2227 | val_dice_2=0.0003 | val_loss_1a=7.4180 | val_loss_1b=1.2339
+[Warmup] Epoch 008/030 | train_loss=2.1628 | val_dice_2=0.0000 | val_loss_1a=7.4103 | val_loss_1b=1.2344
+[Warmup] Epoch 009/030 | train_loss=2.1307 | val_dice_2=0.0001 | val_loss_1a=7.4190 | val_loss_1b=1.2371
+[Warmup] Epoch 010/030 | train_loss=2.0657 | val_dice_2=0.0000 | val_loss_1a=7.4252 | val_loss_1b=1.2405
+[Warmup] Epoch 011/030 | train_loss=2.0054 | val_dice_2=0.0000 | val_loss_1a=7.4239 | val_loss_1b=1.2399
+[Warmup] Epoch 012/030 | train_loss=1.9568 | val_dice_2=0.0000 | val_loss_1a=7.4234 | val_loss_1b=1.2399
+[Warmup] Epoch 013/030 | train_loss=1.9111 | val_dice_2=0.0000 | val_loss_1a=7.4211 | val_loss_1b=1.2413
+[Warmup] Epoch 014/030 | train_loss=1.8612 | val_dice_2=0.0000 | val_loss_1a=7.4238 | val_loss_1b=1.2453
+[Warmup] Epoch 015/030 | train_loss=1.8194 | val_dice_2=0.0000 | val_loss_1a=7.4212 | val_loss_1b=1.2478
+[Warmup] Epoch 016/030 | train_loss=1.7860 | val_dice_2=0.0000 | val_loss_1a=7.4153 | val_loss_1b=1.2523
+[Warmup] Epoch 017/030 | train_loss=1.7374 | val_dice_2=0.0000 | val_loss_1a=7.3847 | val_loss_1b=1.2512
+[Warmup] Epoch 018/030 | train_loss=1.6978 | val_dice_2=0.0000 | val_loss_1a=7.3965 | val_loss_1b=1.2531
+[Warmup] Epoch 019/030 | train_loss=1.6650 | val_dice_2=0.0000 | val_loss_1a=7.3918 | val_loss_1b=1.2518
+[Warmup] Epoch 020/030 | train_loss=1.6322 | val_dice_2=0.0000 | val_loss_1a=7.4166 | val_loss_1b=1.2529
+[Warmup] Epoch 021/030 | train_loss=1.6030 | val_dice_2=0.0000 | val_loss_1a=7.4153 | val_loss_1b=1.2576
+[Warmup] Epoch 022/030 | train_loss=1.5764 | val_dice_2=0.0000 | val_loss_1a=7.4117 | val_loss_1b=1.2555
+[Warmup] Epoch 023/030 | train_loss=1.5520 | val_dice_2=0.0000 | val_loss_1a=7.4006 | val_loss_1b=1.2518
+[Warmup] Epoch 024/030 | train_loss=1.5243 | val_dice_2=0.0000 | val_loss_1a=7.3907 | val_loss_1b=1.2547
+[Warmup] Epoch 025/030 | train_loss=1.4978 | val_dice_2=0.0000 | val_loss_1a=7.3809 | val_loss_1b=1.2524
+[Warmup] Epoch 026/030 | train_loss=1.4703 | val_dice_2=0.0008 | val_loss_1a=7.3739 | val_loss_1b=1.2553
+[Warmup] Epoch 027/030 | train_loss=1.4476 | val_dice_2=0.0013 | val_loss_1a=7.3836 | val_loss_1b=1.2539
+[Warmup] Epoch 028/030 | train_loss=1.4258 | val_dice_2=0.0097 | val_loss_1a=7.3767 | val_loss_1b=1.2548
+  -> New best checkpoint saved (warmup, val_dice_2=0.0097)
+[Warmup] Epoch 029/030 | train_loss=1.4043 | val_dice_2=0.0231 | val_loss_1a=7.3750 | val_loss_1b=1.2548
+  -> New best checkpoint saved (warmup, val_dice_2=0.0231)
+[Warmup] Epoch 030/030 | train_loss=1.3836 | val_dice_2=0.0274 | val_loss_1a=7.3761 | val_loss_1b=1.2578
+  -> New best checkpoint saved (warmup, val_dice_2=0.0274)
+[Calibration] Initial losses — 1a=7.6333  1b=2.2211  2=1.3690
+[Calibration] Effective weights after normalisation — λ_1a/L0=0.1310  λ_1b/L0=0.4502  λ_2/L0=0.7305
+
+============================================================
+Joint phase (80 epochs) — all 3 tasks
+============================================================
+[Joint] Epoch 001/080 (global 031) | total=nan | 1a=nan | 1b=nan | 2=nan | val_dice_2=0.0000
+[Joint] Epoch 002/080 (global 032) | total=nan | 1a=nan | 1b=nan | 2=nan | val_dice_2=0.0000
+[Joint] Epoch 003/080 (global 033) | total=nan | 1a=nan | 1b=nan | 2=nan | val_dice_2=0.0000
+[Joint] Epoch 004/080 (global 034) | total=nan | 1a=nan | 1b=nan | 2=nan | val_dice_2=0.0000
+[Joint] Epoch 005/080 (global 035) | total=nan | 1a=nan | 1b=nan | 2=nan | val_dice_2=0.0000
+[Joint] Epoch 006/080 (global 036) | total=nan | 1a=nan | 1b=nan | 2=nan | val_dice_2=0.0000
+[Joint] Epoch 007/080 (global 037) | total=nan | 1a=nan | 1b=nan | 2=nan | val_dice_2=0.0000
+[Joint] Epoch 008/080 (global 038) | total=nan | 1a=nan | 1b=nan | 2=nan | val_dice_2=0.0000
+[Joint] Epoch 009/080 (global 039) | total=nan | 1a=nan | 1b=nan | 2=nan | val_dice_2=0.0000
+[Joint] Epoch 010/080 (global 040) | total=nan | 1a=nan | 1b=nan | 2=nan | val_dice_2=0.0000
+[Joint] Epoch 011/080 (global 041) | total=nan | 1a=nan | 1b=nan | 2=nan | val_dice_2=0.0000
+[Joint] Epoch 012/080 (global 042) | total=nan | 1a=nan | 1b=nan | 2=nan | val_dice_2=0.0000
+[Joint] Epoch 013/080 (global 043) | total=nan | 1a=nan | 1b=nan | 2=nan | val_dice_2=0.0000
+[Joint] Epoch 014/080 (global 044) | total=nan | 1a=nan | 1b=nan | 2=nan | val_dice_2=0.0000
+[Joint] Epoch 015/080 (global 045) | total=nan | 1a=nan | 1b=nan | 2=nan | val_dice_2=0.0000
+  -> Early stopping triggered at epoch 45 (patience=15)
+
+Training complete. Best val Dice (Task 2): 0.0274
+Checkpoint : outputs/checkpoints/RUN_0004/multitask_best.pt
+History    : results/runs/RUN_0004/training_history.json
+
+[OK] Training completed.
+  Durée entraînement : 65 min
+
+════════════════════════════════════════
+ Phase 2/2 — Évaluation (3 tâches)
+════════════════════════════════════════
+
+[LISA 2026] Evaluation
+  Run    : 0004
+  Task   : 1a+1b+2
+  Module : src.evaluate_multitask
+  Config : configs/run_0004_multitask.yaml
+
+[1/1] Running multi-task evaluation (Tasks 1a, 1b, 2)
+  $ /lustre/fshomisc/sup/pub/anaconda-py3/h100/2024.06/envs/pytorch-gpu-2.5.0+py3.12.7/bin/python3 -m src.evaluate_multitask --config configs/run_0004_multitask.yaml
+[INFO] Loaded checkpoint from outputs/checkpoints/RUN_0004/multitask_best.pt (epoch 30, val_dice_2=0.0274)
+Val sizes — 1a: 96, 1b: 10, 2: 12
+
+── Task 1a — Artifact classification ──
+
+── Task 1b — Image reconstruction ──
+
+── Task 2 — Multi-structure segmentation ──
+
+[INFO] Metrics saved to results/runs/RUN_0004/metrics.json
+
+── Summary ──────────────────────────────────────────────────────────
+  Task 1a — aggregate       : 0.3261
+  Task 1a — accuracy (global): 0.6071
+  Task 1b — PSNR            : 3.82 dB
+  Task 1b — L1              : 1.2578
+  Task 1b — n_subjects      : 10
+  Task 2  — mean DSC        : 0.0274
+  Task 2  — mean HD95       : 37.24
+  Task 2  — mean ASSD       : 26.11
+  Task 2  — n_subjects      : 12
+
+[OK] Evaluation complete.
+  Durée évaluation : 0 min
+
+=======================================================================
+  RUN_0004 TERMINÉ
+  Fin        : Tue May 19 18:33:48 CEST 2026
+  Durée tot. : 66 min
+  Métriques  : results/runs/RUN_0004/metrics.json
+  Checkpoint : outputs/checkpoints/RUN_0004/multitask_best.pt
+=======================================================================
+
+── Résumé métriques ──────────────────────────────────────────────────
+  Task 1a — aggregate : 0.3261
+  Task 1b — PSNR      : 3.82 dB
+  Task 2  — mean DSC  : 0.0274
