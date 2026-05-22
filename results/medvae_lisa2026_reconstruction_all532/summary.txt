@@ -1,0 +1,9 @@
+MedVAE reconstruction analysis on LISA 2026
+n_samples_processed: 532
+mode_full: 532
+mode_patch: 0
+mean_mae: 0.047088
+mean_ssim: 0.919829
+mean_ssim_clean: 0.913912
+mean_ssim_with_artifact: 0.921666
+orientation_ssim_mean: sagittal=0.922519, coronal=0.920326, axial=0.921367
