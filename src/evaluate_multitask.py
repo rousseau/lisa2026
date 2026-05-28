@@ -28,7 +28,14 @@ from src.utils.metrics.segmentation import (
     keep_largest_connected_per_class,
     infer_logits_tta,
 )
-from src.utils.metrics.reconstruction import compute_psnr, compute_lpips_batch
+from src.utils.metrics.reconstruction import (
+    build_inception_model,
+    compute_fid,
+    compute_psnr,
+    compute_lpips_batch,
+    extract_inception_features,
+    slice_to_rgb,
+)
 
 
 def to_3tuple(values):
@@ -126,22 +133,31 @@ def evaluate_task1a(model, val_loader_1a, device, smoke_test: bool = False) -> d
 
 
 @torch.no_grad()
-def evaluate_task1b(model, val_loader_1b, device, smoke_test: bool = False) -> dict:
-    """Evaluate Task 1b reconstruction metrics: PSNR and LPIPS.
+def evaluate_task1b(
+    model,
+    val_loader_1b,
+    device,
+    smoke_test: bool = False,
+    fid_num_slices_per_volume: int = 10,
+) -> dict:
+    """Evaluate Task 1b reconstruction metrics: PSNR, LPIPS and FID.
 
     PSNR is computed per volume on values clamped to [0, 1].
     LPIPS is computed slice-by-slice (axial) using the AlexNet backbone.
-    FID is omitted here (requires a large validation set for reliable estimation).
+    FID is computed globally on InceptionV3 pool features extracted from
+    ``fid_num_slices_per_volume`` axial slices per volume (same methodology
+    as the standalone ``evaluate_task1b.py``).
 
     Args:
-        model:         Loaded ``DynUNetMultiHeadModel`` in eval mode.
-        val_loader_1b: Validation DataLoader for Task 1b.
-                       Batches: ``{"img": [B,1,H,W,D], "subject": [...]}``.
-        device:        Torch device string.
-        smoke_test:    If True, stop after 3 volumes.
+        model:                    Loaded ``DynUNetMultiHeadModel`` in eval mode.
+        val_loader_1b:            Validation DataLoader for Task 1b.
+                                  Batches: ``{"img": [B,1,H,W,D], "subject": [...]}``.
+        device:                   Torch device string.
+        smoke_test:               If True, stop after 3 volumes.
+        fid_num_slices_per_volume: Number of axial slices to extract per volume for FID.
 
     Returns:
-        ``{"psnr": float, "lpips": float, "l1": float, "n_subjects": int}``
+        ``{"psnr": float, "lpips": float, "fid": float, "l1": float, "n_subjects": int}``
     """
     model.eval()
     use_amp = device == "cuda"
@@ -150,7 +166,12 @@ def evaluate_task1b(model, val_loader_1b, device, smoke_test: bool = False) -> d
     l1_values = []
     recon_vols = []
     target_vols = []
+    real_slices = []
+    fake_slices = []
     n_subjects = 0
+
+    # Build InceptionV3 once (used for FID)
+    inception_model = build_inception_model(device)
 
     for batch_idx, batch in enumerate(tqdm(val_loader_1b, desc="Eval-Task1b")):
         images = batch["img"].to(device)  # [B, 1, H, W, D]
@@ -163,8 +184,17 @@ def evaluate_task1b(model, val_loader_1b, device, smoke_test: bool = False) -> d
 
         for i in range(images.shape[0]):
             psnr_values.append(compute_psnr(recon_c[i : i + 1], target_c[i : i + 1]))
-            recon_vols.append(recon_c[i, 0].cpu().numpy())
-            target_vols.append(target_c[i, 0].cpu().numpy())
+            pred_np = recon_c[i, 0].cpu().numpy()
+            clean_np = target_c[i, 0].cpu().numpy()
+            recon_vols.append(pred_np)
+            target_vols.append(clean_np)
+
+            # Collect axial slices for FID (evenly spaced along Z axis)
+            d = pred_np.shape[-1]
+            indices = np.linspace(0, d - 1, fid_num_slices_per_volume, dtype=int)
+            for z in indices:
+                fake_slices.append(slice_to_rgb(pred_np, z))
+                real_slices.append(slice_to_rgb(clean_np, z))
 
         l1_values.append(float(F.l1_loss(recon, images).item()))
         n_subjects += int(images.shape[0])
@@ -174,9 +204,22 @@ def evaluate_task1b(model, val_loader_1b, device, smoke_test: bool = False) -> d
 
     lpips_score = compute_lpips_batch(recon_vols, target_vols, device=device)
 
+    # ── FID ────────────────────────────────────────────────────────────────
+    if len(real_slices) >= 2:
+        print(f"Computing FID on {len(real_slices)} slice pairs …")
+        real_arr = np.stack(real_slices, axis=0)
+        fake_arr = np.stack(fake_slices, axis=0)
+        real_features = extract_inception_features(real_arr, inception_model, device)
+        fake_features = extract_inception_features(fake_arr, inception_model, device)
+        fid_score = compute_fid(real_features, fake_features)
+    else:
+        print("  ! Not enough slices to compute FID (need >= 2). Setting FID = nan.")
+        fid_score = float("nan")
+
     return {
         "psnr": float(np.mean(psnr_values)) if psnr_values else float("nan"),
         "lpips": lpips_score,
+        "fid": fid_score,
         "l1": float(np.mean(l1_values)) if l1_values else float("nan"),
         "n_subjects": n_subjects,
     }
@@ -401,8 +444,11 @@ def main():
     )
 
     print("\n── Task 1b — Image reconstruction ──")
+    fid_slices = int(config.get("inference", {}).get("fid_num_slices_per_volume", 10))
     results_1b = evaluate_task1b(
-        model, val_loader_1b, device, smoke_test=args.smoke_test
+        model, val_loader_1b, device,
+        smoke_test=args.smoke_test,
+        fid_num_slices_per_volume=fid_slices,
     )
 
     print("\n── Task 2 — Multi-structure segmentation ──")
@@ -432,6 +478,7 @@ def main():
     print(f"  Task 1a — accuracy (global): {results_1a['global']['accuracy']:.4f}")
     print(f"  Task 1b — PSNR            : {results_1b['psnr']:.2f} dB")
     print(f"  Task 1b — LPIPS           : {results_1b['lpips']:.4f}")
+    print(f"  Task 1b — FID             : {results_1b['fid']:.4f}")
     print(f"  Task 1b — L1              : {results_1b['l1']:.4f}")
     print(f"  Task 1b — n_subjects      : {results_1b['n_subjects']}")
     print(f"  Task 2  — mean DSC        : {results_2['global']['mean_dsc']:.4f}")
