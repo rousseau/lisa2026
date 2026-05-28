@@ -10,9 +10,7 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 import yaml
-from monai.inferers import sliding_window_inference
 from monai.metrics import compute_average_surface_distance, compute_hausdorff_distance
-from scipy import ndimage
 from sklearn.metrics import (
     accuracy_score,
     f1_score,
@@ -24,84 +22,17 @@ from tqdm import tqdm
 
 from src.datasets import TASK_NAMES, get_multitask_dataloaders
 from src.models import DynUNetMultiHeadModel
-
-EPS = 1e-8
-
-
-# ─── Utility functions (mirrored from evaluate_task2_dynunet.py) ────────────────
+from src.utils.metrics.segmentation import (
+    dice_binary,
+    compute_rve,
+    keep_largest_connected_per_class,
+    infer_logits_tta,
+)
+from src.utils.metrics.reconstruction import compute_psnr, compute_lpips_batch
 
 
 def to_3tuple(values):
     return tuple(int(v) for v in values)
-
-
-def dice_binary(pred: torch.Tensor, target: torch.Tensor) -> float:
-    """Compute Dice similarity coefficient for a binary pair of tensors."""
-    inter = torch.logical_and(pred, target).sum().item()
-    den = pred.sum().item() + target.sum().item()
-    return float((2.0 * inter + EPS) / (den + EPS))
-
-
-def compute_rve(pred: torch.Tensor, target: torch.Tensor):
-    """Relative Volume Error — returns NaN when prediction is present but GT is empty."""
-    pred_vol = float(pred.sum().item())
-    true_vol = float(target.sum().item())
-    if true_vol <= 0.0 and pred_vol <= 0.0:
-        return 0.0
-    if true_vol <= 0.0 and pred_vol > 0.0:
-        return np.nan
-    return float(abs(pred_vol - true_vol) / (true_vol + EPS))
-
-
-def keep_largest_connected_per_class(pred: np.ndarray, num_classes: int) -> np.ndarray:
-    """Retain only the largest connected component for each foreground class."""
-    out = np.zeros_like(pred)
-    for class_id in range(1, num_classes):
-        mask = pred == class_id
-        if not np.any(mask):
-            continue
-        labeled, n_comp = ndimage.label(mask)
-        if n_comp <= 1:
-            out[mask] = class_id
-            continue
-        sizes = ndimage.sum(mask, labeled, index=np.arange(1, n_comp + 1))
-        keep = int(np.argmax(sizes)) + 1
-        out[labeled == keep] = class_id
-    return out
-
-
-def infer_logits_tta(
-    model_fn, image, roi_size, overlap, sw_batch_size, use_amp, tta_axes=None
-):
-    """Sliding-window inference with optional test-time augmentation (axis flips)."""
-    if not tta_axes:
-        with torch.amp.autocast("cuda", enabled=use_amp):
-            return sliding_window_inference(
-                image,
-                roi_size=roi_size,
-                sw_batch_size=sw_batch_size,
-                predictor=model_fn,
-                overlap=overlap,
-            )
-
-    logits_sum = None
-    variants = [None] + [tuple(ax) for ax in tta_axes]
-
-    for axes in variants:
-        inp = torch.flip(image, dims=axes) if axes is not None else image
-        with torch.amp.autocast("cuda", enabled=use_amp):
-            logits = sliding_window_inference(
-                inp,
-                roi_size=roi_size,
-                sw_batch_size=sw_batch_size,
-                predictor=model_fn,
-                overlap=overlap,
-            )
-        if axes is not None:
-            logits = torch.flip(logits, dims=axes)
-        logits_sum = logits if logits_sum is None else logits_sum + logits
-
-    return logits_sum / float(len(variants))
 
 
 # ─── Per-task evaluation functions ──────────────────────────────────────────────
@@ -196,14 +127,11 @@ def evaluate_task1a(model, val_loader_1a, device, smoke_test: bool = False) -> d
 
 @torch.no_grad()
 def evaluate_task1b(model, val_loader_1b, device, smoke_test: bool = False) -> dict:
-    """Evaluate Task 1b reconstruction metrics: PSNR and L1.
+    """Evaluate Task 1b reconstruction metrics: PSNR and LPIPS.
 
-    LPIPS and FID are skipped here because the small validation set gives
-    unstable estimates; they can be added in post-processing with dedicated
-    scripts if needed.
-
-    PSNR is computed per volume on values clamped to [0, 1]:
-        PSNR = 10 * log10(1.0 / (MSE + 1e-8))
+    PSNR is computed per volume on values clamped to [0, 1].
+    LPIPS is computed slice-by-slice (axial) using the AlexNet backbone.
+    FID is omitted here (requires a large validation set for reliable estimation).
 
     Args:
         model:         Loaded ``DynUNetMultiHeadModel`` in eval mode.
@@ -213,13 +141,15 @@ def evaluate_task1b(model, val_loader_1b, device, smoke_test: bool = False) -> d
         smoke_test:    If True, stop after 3 volumes.
 
     Returns:
-        ``{"psnr": float, "l1": float, "n_subjects": int}``
+        ``{"psnr": float, "lpips": float, "l1": float, "n_subjects": int}``
     """
     model.eval()
     use_amp = device == "cuda"
 
     psnr_values = []
     l1_values = []
+    recon_vols = []
+    target_vols = []
     n_subjects = 0
 
     for batch_idx, batch in enumerate(tqdm(val_loader_1b, desc="Eval-Task1b")):
@@ -228,25 +158,25 @@ def evaluate_task1b(model, val_loader_1b, device, smoke_test: bool = False) -> d
         with torch.amp.autocast("cuda", enabled=use_amp):
             recon = model.forward_task1b(images)  # [B, 1, H, W, D]
 
-        # Clamp to [0, 1] for PSNR computation
         recon_c = recon.clamp(0.0, 1.0)
         target_c = images.clamp(0.0, 1.0)
 
-        # PSNR per volume (val loader uses batch_size=1 but handle >1 gracefully)
         for i in range(images.shape[0]):
-            mse = F.mse_loss(recon_c[i : i + 1], target_c[i : i + 1]).item()
-            psnr = 10.0 * np.log10(1.0 / (mse + 1e-8))
-            psnr_values.append(float(psnr))
+            psnr_values.append(compute_psnr(recon_c[i : i + 1], target_c[i : i + 1]))
+            recon_vols.append(recon_c[i, 0].cpu().numpy())
+            target_vols.append(target_c[i, 0].cpu().numpy())
 
-        # L1 on unclamped values for consistency with training loss
         l1_values.append(float(F.l1_loss(recon, images).item()))
         n_subjects += int(images.shape[0])
 
-        if smoke_test and batch_idx >= 2:  # 3 volumes max
+        if smoke_test and batch_idx >= 2:
             break
+
+    lpips_score = compute_lpips_batch(recon_vols, target_vols, device=device)
 
     return {
         "psnr": float(np.mean(psnr_values)) if psnr_values else float("nan"),
+        "lpips": lpips_score,
         "l1": float(np.mean(l1_values)) if l1_values else float("nan"),
         "n_subjects": n_subjects,
     }
@@ -501,6 +431,7 @@ def main():
     print(f"  Task 1a — aggregate       : {results_1a['global']['aggregate']:.4f}")
     print(f"  Task 1a — accuracy (global): {results_1a['global']['accuracy']:.4f}")
     print(f"  Task 1b — PSNR            : {results_1b['psnr']:.2f} dB")
+    print(f"  Task 1b — LPIPS           : {results_1b['lpips']:.4f}")
     print(f"  Task 1b — L1              : {results_1b['l1']:.4f}")
     print(f"  Task 1b — n_subjects      : {results_1b['n_subjects']}")
     print(f"  Task 2  — mean DSC        : {results_2['global']['mean_dsc']:.4f}")

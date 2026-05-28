@@ -9,84 +9,21 @@ import numpy as np
 import pandas as pd
 import torch
 import yaml
-from monai.inferers import sliding_window_inference
 from monai.metrics import compute_average_surface_distance, compute_hausdorff_distance
-from scipy import ndimage
 from tqdm import tqdm
 
 from src.datasets import get_task2_seg_dataloaders
 from src.models import Task2DynUNetModel
-
-EPS = 1e-8
+from src.utils.metrics.segmentation import (
+    dice_binary,
+    compute_rve,
+    keep_largest_connected_per_class,
+    infer_logits_tta,
+)
 
 
 def to_3tuple(values):
     return tuple(int(v) for v in values)
-
-
-def dice_binary(pred: torch.Tensor, target: torch.Tensor) -> float:
-    inter = torch.logical_and(pred, target).sum().item()
-    den = pred.sum().item() + target.sum().item()
-    return float((2.0 * inter + EPS) / (den + EPS))
-
-
-def compute_rve(pred: torch.Tensor, target: torch.Tensor):
-    pred_vol = float(pred.sum().item())
-    true_vol = float(target.sum().item())
-    if true_vol <= 0.0 and pred_vol <= 0.0:
-        return 0.0
-    if true_vol <= 0.0 and pred_vol > 0.0:
-        return np.nan
-    return float(abs(pred_vol - true_vol) / (true_vol + EPS))
-
-
-def keep_largest_connected_per_class(pred: np.ndarray, num_classes: int) -> np.ndarray:
-    out = np.zeros_like(pred)
-    for class_id in range(1, num_classes):
-        mask = pred == class_id
-        if not np.any(mask):
-            continue
-        labeled, n_comp = ndimage.label(mask)
-        if n_comp <= 1:
-            out[mask] = class_id
-            continue
-        sizes = ndimage.sum(mask, labeled, index=np.arange(1, n_comp + 1))
-        keep = int(np.argmax(sizes)) + 1
-        out[labeled == keep] = class_id
-    return out
-
-
-def infer_logits_tta(
-    model, image, roi_size, overlap, sw_batch_size, use_amp, tta_axes=None
-):
-    if not tta_axes:
-        with torch.amp.autocast("cuda", enabled=use_amp):
-            return sliding_window_inference(
-                image,
-                roi_size=roi_size,
-                sw_batch_size=sw_batch_size,
-                predictor=model,
-                overlap=overlap,
-            )
-
-    logits_sum = None
-    variants = [None] + [tuple(ax) for ax in tta_axes]
-
-    for axes in variants:
-        inp = torch.flip(image, dims=axes) if axes is not None else image
-        with torch.amp.autocast("cuda", enabled=use_amp):
-            logits = sliding_window_inference(
-                inp,
-                roi_size=roi_size,
-                sw_batch_size=sw_batch_size,
-                predictor=model,
-                overlap=overlap,
-            )
-        if axes is not None:
-            logits = torch.flip(logits, dims=axes)
-        logits_sum = logits if logits_sum is None else logits_sum + logits
-
-    return logits_sum / float(len(variants))
 
 
 @torch.no_grad()

@@ -13,21 +13,7 @@ from torch.utils.data import DataLoader
 
 from src.datasets import Task1aMultiLabelDataset, TASK_NAMES
 from src.models import Task1aMultiLabelModel
-
-
-def apply_env_overrides(config: dict) -> dict:
-    """Override data paths from environment when running on shared clusters."""
-    data_root = os.environ.get('LISA_DATA_ROOT')
-    csv_path = os.environ.get('LISA_CSV_PATH')
-
-    if data_root:
-        config['data']['bids_root'] = data_root
-        config['data']['csv_path'] = csv_path or os.path.join(data_root, 'LISA_Task1a_2026.csv')
-
-    if csv_path:
-        config['data']['csv_path'] = csv_path
-
-    return config
+from src.utils.config import apply_env_overrides
 
 
 def evaluate(config: dict, split: str = 'val', smoke_test: bool = False) -> str:
