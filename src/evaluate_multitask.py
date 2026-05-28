@@ -116,7 +116,7 @@ def evaluate_task1a(model, val_loader_1a, device, smoke_test: bool = False) -> d
     RUN_0001 / RUN_0002 evaluations.
 
     Args:
-        model:         Loaded ``SharedEncoderMultiTaskModel`` in eval mode.
+        model:         Loaded ``DynUNetMultiHeadModel`` in eval mode.
         val_loader_1a: Validation DataLoader for Task 1a.
                        Batches: ``{"img": [B,1,H,W,D], "labels": [B,7], ...}``.
         device:        Torch device string.
@@ -206,7 +206,7 @@ def evaluate_task1b(model, val_loader_1b, device, smoke_test: bool = False) -> d
         PSNR = 10 * log10(1.0 / (MSE + 1e-8))
 
     Args:
-        model:         Loaded ``SharedEncoderMultiTaskModel`` in eval mode.
+        model:         Loaded ``DynUNetMultiHeadModel`` in eval mode.
         val_loader_1b: Validation DataLoader for Task 1b.
                        Batches: ``{"img": [B,1,H,W,D], "subject": [...]}``.
         device:        Torch device string.
@@ -263,7 +263,7 @@ def evaluate_task2(
     predictor so the shared encoder is exercised with the segmentation decoder.
 
     Args:
-        model:         Loaded ``SharedEncoderMultiTaskModel`` in eval mode.
+        model:         Loaded ``DynUNetMultiHeadModel`` in eval mode.
         val_loader_2:  Validation DataLoader for Task 2.
                        Batches: ``{"img": [B,1,H,W,D], "label": [B,1,H,W,D],
                                   "subject": [...]}``.

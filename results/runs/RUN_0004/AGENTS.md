@@ -200,42 +200,69 @@ Voir `implementation_plan.md` pour les détails d'exécution.
 
 ---
 
-## Résultats
+## Résultats (v1 / v2 / v3)
 
-| Métrique | Valeur | Baseline |
-|----------|--------|---------|
-| Task 1a — Aggregate | **0.3261** | 0.6887 (RUN_0001) |
-| Task 1a — Accuracy | 0.6071 | — |
-| Task 2 — mean DSC | **0.0274** | 0.362 (RUN_0003) |
-| Task 2 — mean HD95 | 37.24 | 15.99 (RUN_0003) |
-| Task 2 — mean ASSD | 26.11 | 10.51 (RUN_0003) |
-| Task 1b — PSNR | 3.82 dB | — |
-| Task 1b — L1 | 1.2578 | — |
+### Comparaison des 3 versions
 
-**Status : REJETÉ (v2)** — La phase joint produit des pertes **NaN** dès le premier epoch. L'évaluation a été faite sur le meilleur checkpoint du warmup (epoch 30, val_dice_2=0.0274).
+| Métrique | v1 (job 878620) | v2 (job 887047) | v3 (job 1063254) | v4 (job 1076254) | Baseline |
+|----------|-----------------|-----------------|------------------|------------------|----------|
+| Task 1a — Aggregate | 0.1293 | 0.3261 | 0.1945 | 0.1944 | 0.6887 (RUN_0001) |
+| Task 1a — Accuracy | 0.0997 | 0.6071 | 0.2693 | — | — |
+| Task 1a — Recall | — | — | 0.3333 (constant) | 0.3333 (constant) | — |
+| Task 2 — mean DSC | 0.0083 | 0.0274 | 0.1105 | **0.1649** | 0.362 (RUN_0003) |
+| Task 2 — mean HD95 | 66.21 | 37.24 | 27.32 | **26.70** | 15.99 (RUN_0003) |
+| Task 2 — mean HD | — | — | 33.16 | — | — |
+| Task 2 — mean RVE | — | — | 1.004 | — | — |
+| Task 2 — mean ASSD | — | 26.11 | 9.99 | 11.12 | 10.51 (RUN_0003) |
+| Task 1b — PSNR | 3.48 dB | 3.82 dB | 3.38 dB | 3.38 dB | — |
+| Task 1b — L1 | — | 1.2578 | 1.2335 | — | — |
+| Warmup epochs | 10 | 30 | 43 | **1** | — |
+| val_dice_2 fin warmup | 0.0083 | 0.0274 | 0.1104 | **0.1649** | — |
+| Phase joint | NaN | NaN | NaN (100%) | NaN (100%) | — |
+
+**Statut v3 : À RETESTER** — Le warmup a atteint la cible DSC=0.10 (epoch 43, val_dice_2=0.1104 ✅). La head warmup a produit des poids NaN à partir de l'epoch 46 (LR trop élevé : ~7.56e-5 hérité du scheduler T_max=130). Un bug Python (`max(nan, 1e-6)`) a rendu la calibration NaN → phase joint 100% inerte. Corrections précises et ciblées identifiées pour v4 (voir section Décision).
+
+**Statut v4 (job 1076254) : À RETESTER** — ⚠️ Run exécuté avec le code v3 (non synchronisé sur Jean Zay). Malgré ce défaut, le warm-start RUN_0003 (46/84 keys) a permis d'atteindre val_dice_2=**0.1649** dès le premier warmup epoch. La head warmup (code v3, LR≈1e-4) a produit des NaN encore plus vite qu'en v3 (hw epoch 2 vs hw epoch 3), confirmant la corrélation LR ↔ vitesse d'explosion. Phase joint 100% NaN. Corrections v5 appliquées localement et vérifiées par smoke test.
+
+**Checkpoint évalué** : warmup epoch 1 (val_dice_2=0.1649) — jamais amélioré en joint.
 
 ---
 
 ## Décision
 
 - [ ] Promu
-- [x] Rejeté
-- [ ] À retester
+- [ ] Rejeté
+- [x] À retester
 
-**Décision : REJETÉ**
+**Décision : À RETESTER (v5 préparée)**
 
-Causes :
-(1) warm-start **46/84 keys** — **réussi** (vs 0/102 en v1) ✅
-(2) Loss calibration **OK** — weights équilibrés (0.131/0.450/0.731) ✅
-(3) **NaN dès epoch joint 1** — échec critique ❌
-(4) Warmup 30 epochs → val_dice_2=0.0274 seulement (cible 0.15) — **lourd** ⚠️
-Toutes les hypothèses H1–H3 réfutées. H5 (risque de conflit de gradient) confirmée.
+Progrès v3 :
+- (1) Warmup convergent depuis zéro : val_dice_2=0.1104 en 43 epochs ✅
+- (2) DSC évaluation = 0.1105 (+304% vs v2, +1230% vs v1) ✅
+- (3) Architecture DynUNetMultiHead confirmée fonctionnelle pour Task 2
 
-→ RUN_0005 devra adresser :
-- **Gradient clipping** obligatoire (`clip_grad_norm_`)
-- **Têtes 1a/1b initialisées séparément** (pas aléatoire)
-- **Warmup ≥ 50 epochs** ou critère DSC ≥ 0.10 minimum
-- **Gradient clipping + LR réduit** pour la phase joint
+Progrès v4 (job 1076254, ⚠️ code v3 non sync) :
+- (4) Warm-start RUN_0003 présent (46/84 keys) → val_dice_2=**0.1649** en 1 seul warmup epoch ✅ (meilleur DSC toutes versions)
+- (5) Corrélation LR ↔ NaN confirmée et reproductible (v4 LR=1e-4 → hw epoch 2, v3 LR=7.56e-5 → hw epoch 3)
+- (6) Distribution classes Task 1a mesurée (Banding ratio 1:52) → pondération nécessaire identifiée
+
+Échecs persistants :
+- (7) Head warmup = source unique de NaN (toutes versions depuis v2) ❌ → **supprimé en v5**
+- (8) Cross-entropie non pondérée → prédicteur constant Task 1a ❌ → **corrigé en v5**
+
+### Corrections v5 (appliquées localement, smoke test validé)
+
+| # | Problème | Correction v5 | Statut |
+|---|----------|---------------|--------|
+| C1 | Head warmup → NaN systématique | `num_head_warmup_epochs: 0` dans config | ✅ Local |
+| C2 | Cross-entropie non pondérée → prédicteur constant | Poids de classe inversement proportionnels aux fréquences | ✅ Local |
+| C3 | LR reset + GradScaler reset manquants en joint | Reset explicite au début de la phase joint | ✅ Local |
+| C4 | Poids NaN propagés sans détection | Vérification NaN des poids avant calibration | ✅ Local |
+| C5 | Bug `max(nan, 1e-6)` → calibration NaN | `nan_to_num` propre dans la calibration | ✅ Local |
+
+Smoke test v5 (local) : `Head warm-up: 0 epochs (disabled)` ✅ · `Band: [0.3/18.2/14.5]` ✅ · calibration `1a=7.6904 1b=1.7345 2=0.4219` (zéro NaN) ✅ · joint `total=3.3636` (zéro NaN) ✅
+
+→ v5 réutilise la même architecture, les mêmes splits, le même script d'évaluation. Les hypothèses H1–H5 restent à valider avec une phase joint fonctionnelle pour la première fois.
 
 ---
 

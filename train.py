@@ -11,6 +11,7 @@ Usage
     python train.py --run 0002
     python train.py --run 0003
     python train.py --run 0004
+    python train.py --run 0005
     python train.py --run 0001 --smoke-test
 
 Run IDs accept an optional "RUN_" prefix:
@@ -18,18 +19,13 @@ Run IDs accept an optional "RUN_" prefix:
 """
 
 import argparse
-import subprocess
 import sys
+
+from src.utils import normalise_run_id, run_cmd, smoke_args as _smoke_args_util
 
 # ---------------------------------------------------------------------------
 # Run registry
 # ---------------------------------------------------------------------------
-# mode:
-#   "per_task"  – module called once per name in "tasks"; receives --task NAME
-#   "single"    – module called once with --config CONFIG
-#
-# supports_smoke_test:
-#   False when the underlying script does not expose --smoke_test.
 
 RUN_REGISTRY = {
     "0001": {
@@ -69,41 +65,27 @@ RUN_REGISTRY = {
         "mode": "single",
         "supports_smoke_test": True,
     },
+    "0005": {
+        "task": "1b",
+        "module": "src.train_task1b",
+        "config": "configs/run_0005_task1b_unet.yaml",
+        "mode": "single",
+        "supports_smoke_test": True,
+    },
 }
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Helpers — thin wrappers around src.utils to preserve local names
 # ---------------------------------------------------------------------------
 
 
-def normalise_run_id(raw: str) -> str:
-    """Strip optional 'RUN_' prefix (case-insensitive)."""
-    stripped = raw.strip()
-    if stripped.upper().startswith("RUN_"):
-        return stripped[4:]
-    return stripped
-
-
 def _run(cmd: list[str]) -> None:
-    """Run *cmd*, exit the process on failure."""
-    print(f"  $ {' '.join(cmd)}")
-    try:
-        subprocess.run(cmd, check=True)
-    except subprocess.CalledProcessError as exc:
-        print(f"\n[ERROR] Command failed (return code {exc.returncode}).")
-        sys.exit(1)
+    run_cmd(cmd)
 
 
 def _smoke_args(entry: dict, smoke_test: bool) -> list[str]:
-    if not smoke_test:
-        return []
-    if entry.get("supports_smoke_test", True):
-        return ["--smoke_test"]
-    print(
-        f"  [WARNING] '{entry['module']}' does not support --smoke_test; running without it."
-    )
-    return []
+    return _smoke_args_util(entry, smoke_test)
 
 
 # ---------------------------------------------------------------------------

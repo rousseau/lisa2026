@@ -20,7 +20,6 @@ Usage
 import argparse
 import json
 import os
-import random
 
 import numpy as np
 import torch
@@ -33,18 +32,11 @@ from tqdm import tqdm
 
 from src.datasets import get_task1b_dataloaders
 from src.models import Task1bUNetModel
+from src.utils.seed import set_seed
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def set_seed(seed: int) -> None:
-    """Fix all random seeds for reproducibility."""
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
 
 
 def add_synthetic_noise(

@@ -4,7 +4,6 @@
 import argparse
 import json
 import os
-import random
 
 import numpy as np
 import torch
@@ -19,13 +18,7 @@ from tqdm import tqdm
 
 from src.datasets import get_task2_seg_dataloaders
 from src.models import Task2DynUNetModel
-
-
-def set_seed(seed: int):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+from src.utils.seed import set_seed
 
 
 def to_3tuple(values):
