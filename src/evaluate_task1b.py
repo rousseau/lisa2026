@@ -22,16 +22,20 @@ import json
 import os
 from typing import Any
 
-import lpips
 import numpy as np
 import torch
 import yaml
-from scipy.linalg import sqrtm
-from torchvision.models import Inception_V3_Weights, inception_v3
 from tqdm import tqdm
 
 from src.datasets import get_task1b_dataloaders
 from src.models import Task1bUNetModel
+from src.utils.metrics.reconstruction import (
+    build_inception_model,
+    compute_fid,
+    compute_psnr,
+    extract_inception_features,
+    slice_to_rgb,
+)
 
 # ---------------------------------------------------------------------------
 # Metric helpers
@@ -42,98 +46,6 @@ def add_synthetic_noise(x: torch.Tensor, noise_std: float) -> torch.Tensor:
     """Add Gaussian noise at a fixed std level for deterministic evaluation."""
     noise = torch.randn_like(x) * noise_std
     return (x + noise).clamp(x.min(), x.max())
-
-
-def compute_psnr(
-    pred: np.ndarray, target: np.ndarray, data_range: float = 1.0
-) -> float:
-    """Compute Peak Signal-to-Noise Ratio (volumetric, 3D).
-
-    Args:
-        pred:       Predicted array, same shape as *target*, values in [0, 1].
-        target:     Ground-truth array, values in [0, 1].
-        data_range: Maximum possible value (1.0 for normalised inputs).
-
-    Returns:
-        PSNR in dB, or ``float('inf')`` for a perfect reconstruction.
-    """
-    mse = np.mean((pred - target) ** 2)
-    if mse == 0:
-        return float("inf")
-    return 10 * np.log10(data_range**2 / mse)
-
-
-def slice_to_rgb(volume: np.ndarray, z: int) -> np.ndarray:
-    """Extract an axial slice from a 3-D volume and duplicate to 3 channels.
-
-    Args:
-        volume: Array of shape ``[H, W, D]`` with values in [0, 1].
-        z:      Axial index along the last dimension.
-
-    Returns:
-        RGB array of shape ``[3, H, W]`` in [0, 1].
-    """
-    slc = volume[:, :, z]
-    vmin, vmax = float(slc.min()), float(slc.max())
-    if vmax > vmin:
-        slc = (slc - vmin) / (vmax - vmin)
-    else:
-        slc = np.zeros_like(slc)
-    return np.stack([slc, slc, slc], axis=0).astype(np.float32)
-
-
-def extract_inception_features(
-    slices_rgb: np.ndarray,
-    model: torch.nn.Module,
-    device: str,
-    batch_size: int = 32,
-) -> np.ndarray:
-    """Extract 2048-dim InceptionV3 pool features from a set of 2D RGB slices.
-
-    Args:
-        slices_rgb: Array of shape ``[N, 3, H, W]`` with values in [0, 1].
-        model:      InceptionV3 model with ``fc`` replaced by ``Identity``.
-        device:     Torch device string.
-        batch_size: Inference mini-batch size.
-
-    Returns:
-        Features array of shape ``[N, 2048]``.
-    """
-    model.eval()
-    features = []
-    n = len(slices_rgb)
-    for start in range(0, n, batch_size):
-        end = min(start + batch_size, n)
-        batch = torch.tensor(slices_rgb[start:end], dtype=torch.float32).to(device)
-        # InceptionV3 expects 299×299 inputs.
-        batch = torch.nn.functional.interpolate(
-            batch, size=(299, 299), mode="bilinear", align_corners=False
-        )
-        with torch.no_grad():
-            feat = model(batch)  # [B, 2048]
-        features.append(feat.cpu().numpy())
-    return np.concatenate(features, axis=0)
-
-
-def compute_fid(real_features: np.ndarray, fake_features: np.ndarray) -> float:
-    """Compute Fréchet Inception Distance between two sets of feature vectors.
-
-    Args:
-        real_features: ``[N, D]`` features from real (clean) slices.
-        fake_features: ``[N, D]`` features from predicted (denoised) slices.
-
-    Returns:
-        Scalar FID score.
-    """
-    mu1 = real_features.mean(0)
-    mu2 = fake_features.mean(0)
-    sigma1 = np.cov(real_features, rowvar=False)
-    sigma2 = np.cov(fake_features, rowvar=False)
-    diff = mu1 - mu2
-    covmean_raw = sqrtm(sigma1.dot(sigma2))
-    # np.real handles both complex and real arrays, avoiding ndarray.real property issues.
-    covmean: np.ndarray = np.real(covmean_raw)  # type: ignore[arg-type]
-    return float(diff.dot(diff) + np.trace(sigma1 + sigma2 - 2.0 * covmean))
 
 
 # ---------------------------------------------------------------------------
@@ -193,17 +105,17 @@ def evaluate(config: "dict[str, Any]", smoke_test: bool = False) -> None:
     print(f"Loaded checkpoint: {ckpt_path}")
 
     # ── LPIPS ──────────────────────────────────────────────────────────────
-    lpips_fn = lpips.LPIPS(net="vgg").to(device)
-    lpips_fn.eval()
+    try:
+        import lpips as _lpips
+        lpips_fn = _lpips.LPIPS(net="vgg").to(device)
+        lpips_fn.eval()
+        has_lpips = True
+    except ImportError:
+        lpips_fn = None
+        has_lpips = False
 
     # ── InceptionV3 for FID (pool features, no classification head) ────────
-    inception_model = inception_v3(weights=Inception_V3_Weights.DEFAULT)
-    inception_model.aux_logits = False
-    # Replace FC with Identity to get the 2048-dim pool layer output.
-    # setattr used to bypass static type-checker (fc is typed as Linear).
-    setattr(inception_model, "fc", torch.nn.Identity())
-    inception_model = inception_model.to(device)
-    inception_model.eval()
+    inception_model = build_inception_model(device)
 
     # ── accumulate metrics ─────────────────────────────────────────────────
     psnr_values: list[float] = []
@@ -241,17 +153,13 @@ def evaluate(config: "dict[str, Any]", smoke_test: bool = False) -> None:
 
         for z in z_indices:
             # LPIPS – expects [B, 3, H, W] in [−1, 1]
-            pred_slc = torch.from_numpy(pred_norm[:, :, z]).float()
-            clean_slc = torch.from_numpy(clean_norm[:, :, z]).float()
-
-            pred_3ch = pred_slc[None, None].expand(1, 3, -1, -1).to(device)
-            clean_3ch = clean_slc[None, None].expand(1, 3, -1, -1).to(device)
-            pred_3ch = pred_3ch * 2.0 - 1.0
-            clean_3ch = clean_3ch * 2.0 - 1.0
-
-            with torch.no_grad():
-                lpips_val = float(lpips_fn(pred_3ch, clean_3ch).item())
-            lpips_values.append(lpips_val)
+            if has_lpips and lpips_fn is not None:
+                pred_slc = torch.from_numpy(pred_norm[:, :, z]).float()
+                clean_slc = torch.from_numpy(clean_norm[:, :, z]).float()
+                pred_3ch = pred_slc[None, None].expand(1, 3, -1, -1).to(device) * 2.0 - 1.0
+                clean_3ch = clean_slc[None, None].expand(1, 3, -1, -1).to(device) * 2.0 - 1.0
+                with torch.no_grad():
+                    lpips_values.append(float(lpips_fn(pred_3ch, clean_3ch).item()))
 
             # FID – [3, H, W] in [0, 1]
             fake_slices.append(slice_to_rgb(pred_norm, z))

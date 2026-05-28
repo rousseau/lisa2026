@@ -1,9 +1,10 @@
 """Task 1b reconstruction metrics: PSNR, LPIPS, FID."""
 
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 
 
@@ -69,6 +70,94 @@ def compute_lpips_batch(
                 scores.append(float(loss_fn(r_slice, t_slice).item()))
 
     return float(np.mean(scores)) if scores else float("nan")
+
+
+def slice_to_rgb(volume: np.ndarray, z: int) -> np.ndarray:
+    """Extract an axial slice from a 3-D volume and duplicate to 3 channels.
+
+    Args:
+        volume: Array of shape ``[H, W, D]`` with values in [0, 1].
+        z:      Axial index along the last dimension.
+
+    Returns:
+        RGB array of shape ``[3, H, W]`` in [0, 1].
+    """
+    slc = volume[:, :, z]
+    vmin, vmax = float(slc.min()), float(slc.max())
+    slc = (slc - vmin) / (vmax - vmin) if vmax > vmin else np.zeros_like(slc)
+    return np.stack([slc, slc, slc], axis=0).astype(np.float32)
+
+
+def build_inception_model(device: str) -> nn.Module:
+    """Return an InceptionV3 model with the classification head replaced by Identity.
+
+    The model outputs 2048-dim pool features.
+
+    Args:
+        device: Torch device string.
+
+    Returns:
+        InceptionV3 module in eval mode on *device*.
+    """
+    from torchvision.models import Inception_V3_Weights, inception_v3
+
+    model = inception_v3(weights=Inception_V3_Weights.DEFAULT)
+    model.aux_logits = False
+    setattr(model, "fc", nn.Identity())
+    model = model.to(device)
+    model.eval()
+    return model
+
+
+def extract_inception_features(
+    slices_rgb: np.ndarray,
+    model: nn.Module,
+    device: str,
+    batch_size: int = 32,
+) -> np.ndarray:
+    """Extract 2048-dim InceptionV3 pool features from a set of 2D RGB slices.
+
+    Args:
+        slices_rgb: Array of shape ``[N, 3, H, W]`` with values in [0, 1].
+        model:      InceptionV3 model with ``fc`` replaced by ``Identity``.
+        device:     Torch device string.
+        batch_size: Inference mini-batch size.
+
+    Returns:
+        Features array of shape ``[N, 2048]``.
+    """
+    model.eval()
+    features = []
+    n = len(slices_rgb)
+    for start in range(0, n, batch_size):
+        end = min(start + batch_size, n)
+        batch = torch.tensor(slices_rgb[start:end], dtype=torch.float32).to(device)
+        batch = F.interpolate(batch, size=(299, 299), mode="bilinear", align_corners=False)
+        with torch.no_grad():
+            feat = model(batch)
+        features.append(feat.cpu().numpy())
+    return np.concatenate(features, axis=0)
+
+
+def compute_fid(real_features: np.ndarray, fake_features: np.ndarray) -> float:
+    """Compute Fréchet Inception Distance between two feature matrices.
+
+    Args:
+        real_features: ``[N, D]`` features from real (clean) slices.
+        fake_features: ``[N, D]`` features from predicted (denoised) slices.
+
+    Returns:
+        Scalar FID score.
+    """
+    from scipy.linalg import sqrtm
+
+    mu1 = real_features.mean(0)
+    mu2 = fake_features.mean(0)
+    sigma1 = np.cov(real_features, rowvar=False)
+    sigma2 = np.cov(fake_features, rowvar=False)
+    diff = mu1 - mu2
+    covmean = np.real(sqrtm(sigma1.dot(sigma2)))
+    return float(diff.dot(diff) + np.trace(sigma1 + sigma2 - 2.0 * covmean))
 
 
 def compute_fid_from_features(
