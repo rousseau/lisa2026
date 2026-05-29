@@ -17,9 +17,9 @@
 #SBATCH -C h100
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=20
-#SBATCH --time=100:00:00
+#SBATCH --gres=gpu:4
+#SBATCH --cpus-per-task=40
+#SBATCH --time=20:00:00
 #SBATCH --partition=gpu_p6
 #SBATCH --qos=qos_gpu_h100-t4
 #SBATCH --output=outputs/logs/%x_%j.out
@@ -83,16 +83,19 @@ _pip_if_missing() {
     python3 -c "import $1" 2>/dev/null \
         || { echo "  [dep] $2 ..."; pip install --user --quiet "$2"; }
 }
-_pip_if_missing nibabel   nibabel
-_pip_if_missing scipy     scipy
-_pip_if_missing yaml      pyyaml
-_pip_if_missing pandas    pandas
-_pip_if_missing sklearn   scikit-learn
-_pip_if_missing monai     "monai[nibabel]"
+_pip_if_missing nibabel     nibabel
+_pip_if_missing scipy       scipy
+_pip_if_missing yaml        pyyaml
+_pip_if_missing pandas      pandas
+_pip_if_missing sklearn     scikit-learn
+_pip_if_missing monai       "monai[nibabel]"
+_pip_if_missing lpips       lpips
+_pip_if_missing torchmetrics torchmetrics
 
 echo "  Python  : $(python3 --version)"
 echo "  PyTorch : $(python3 -c 'import torch; print(torch.__version__)')"
 echo "  GPU     : $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader | head -1)"
+echo "  N GPUs  : $(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)"
 
 # ── Vérification des données ──────────────────────────────────────────────────
 if [[ ! -d "$DATA_ROOT" ]]; then
@@ -134,14 +137,49 @@ trap '_requeue' USR1
 echo ""
 echo "── Entraînement RUN_${RUN_ID} ──────────────────────────────────────────"
 T0=$(date +%s)
-python3 train.py --run "$RUN_ID" $SMOKE_FLAG
+
+# Si une config dédiée Jean Zay existe pour ce run, on appelle le module
+# d'entraînement directement plutôt que train.py (qui résout la config lui-même).
+# Cela permet d'utiliser batch_size / num_workers adaptés aux 4xH100.
+JZ_CONFIG="configs/run_${RUN_ID}_jeanzay.yaml"
+if [[ -f "$JZ_CONFIG" ]]; then
+    echo "  Config Jean Zay : $JZ_CONFIG"
+    # Lire la tâche depuis le YAML pour appeler le bon module
+    TASK=$(python3 -c "import yaml; print(yaml.safe_load(open('$JZ_CONFIG'))['run']['task'])")
+    case "$TASK" in
+        1a)        MODULE="src.train_task1a" ;;
+        1b)        MODULE="src.train_task1b" ;;
+        2)         MODULE="src.train_task2"  ;;
+        multitask) MODULE="src.train_multitask" ;;
+        *)         echo "[ERREUR] Tâche inconnue : $TASK"; exit 1 ;;
+    esac
+    python3 -m "$MODULE" --config "$JZ_CONFIG" $SMOKE_FLAG
+else
+    python3 train.py --run "$RUN_ID" $SMOKE_FLAG
+fi
+
 echo "  Durée : $(( ($(date +%s) - T0) / 60 )) min"
 
 # ── Évaluation ────────────────────────────────────────────────────────────────
 echo ""
 echo "── Évaluation RUN_${RUN_ID} ────────────────────────────────────────────"
 T1=$(date +%s)
-python3 evaluate.py --run "$RUN_ID" $SMOKE_FLAG
+
+JZ_CONFIG="configs/run_${RUN_ID}_jeanzay.yaml"
+if [[ -f "$JZ_CONFIG" ]]; then
+    TASK=$(python3 -c "import yaml; print(yaml.safe_load(open('$JZ_CONFIG'))['run']['task'])")
+    case "$TASK" in
+        1a)        EVAL_MODULE="src.evaluate_task1a" ;;
+        1b)        EVAL_MODULE="src.evaluate_task1b" ;;
+        2)         EVAL_MODULE="src.evaluate_task2"  ;;
+        multitask) EVAL_MODULE="src.evaluate_multitask" ;;
+        *)         echo "[ERREUR] Tâche inconnue : $TASK"; exit 1 ;;
+    esac
+    python3 -m "$EVAL_MODULE" --config "$JZ_CONFIG" $SMOKE_FLAG
+else
+    python3 evaluate.py --run "$RUN_ID" $SMOKE_FLAG
+fi
+
 echo "  Durée : $(( ($(date +%s) - T1) / 60 )) min"
 
 # ── Bilan ─────────────────────────────────────────────────────────────────────

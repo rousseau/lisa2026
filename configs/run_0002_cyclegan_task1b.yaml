@@ -29,7 +29,7 @@ training:
   num_epochs: 100
   decay_epoch: 50           # LR constant for first 50, then linear decay to 0
   batch_size: 1
-  num_workers: 4
+  num_workers: 0
   learning_rate: 2.0e-4
   lambda_cycle: 10.0        # cycle-consistency weight
   lambda_identity: 5.0      # identity loss weight

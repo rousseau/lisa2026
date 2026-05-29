@@ -40,8 +40,8 @@ module load pytorch-gpu/py3/2.5.0
 export PYTHONUSERBASE="$WORK/.local"
 export PATH="$WORK/.local/bin:$PATH"
 
-pip install --user --quiet nibabel scipy pyyaml pandas
-echo "  → nibabel, scipy, pyyaml, pandas installés dans \$WORK/.local"
+pip install --user --quiet nibabel scipy pyyaml pandas scikit-learn "monai[nibabel]" lpips torchmetrics
+echo "  → nibabel, scipy, pyyaml, pandas, scikit-learn, monai, lpips, torchmetrics installés dans \$WORK/.local"
 
 echo "[2/3] Dépendances installées"
 

@@ -2,16 +2,16 @@
 
 from .blocks import DoubleConv3d, UpBlock3d
 from .multitask import DynUNetMultiHeadModel
-from .task1a import Task1aMultiLabelModel, Task1aOrdinalModel
-from .task1b import Task1bUNetModel
+from .task1a import Task1aOrdinalModel
+from .task1b import Discriminator3D, Generator3D
 from .task2 import Task2DynUNetModel
 
 __all__ = [
     "DoubleConv3d",
     "UpBlock3d",
     "Task1aOrdinalModel",
-    "Task1aMultiLabelModel",
+    "Generator3D",
+    "Discriminator3D",
     "Task2DynUNetModel",
-    "Task1bUNetModel",
     "DynUNetMultiHeadModel",
 ]

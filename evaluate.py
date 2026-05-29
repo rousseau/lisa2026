@@ -34,9 +34,9 @@ EVAL_REGISTRY = {
         "supports_smoke_test": True,
     },
     "0002": {
-        "task": "1a",
-        "eval_module": "src.evaluate_task1a_multilabel",
-        "config": "configs/run_0002_upf.yaml",
+        "task": "1b",
+        "eval_module": "src.evaluate_task1b",
+        "config": "configs/run_0002_cyclegan_task1b.yaml",
         "supports_smoke_test": True,
     },
     "0003": {

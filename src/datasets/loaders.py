@@ -7,7 +7,6 @@ import pandas as pd
 from torch.utils.data import DataLoader
 
 from .task1a import TASK_NAMES, Task1aDataset
-from .task1b import CleanImageDataset, Task1bDataset, build_task1b_records
 from .task2 import Task2SegmentationDataset
 
 
@@ -52,73 +51,6 @@ def get_dataloaders(
     val_loader = DataLoader(
         val_ds, batch_size=batch_size, shuffle=False,
         num_workers=num_workers, pin_memory=True,
-    )
-    return train_loader, val_loader, len(train_ds), len(val_ds)
-
-
-def get_multilabel_dataloaders(
-    csv_path: str,
-    bids_root: str,
-    split_pkl: str,
-    batch_size: int = 8,
-    num_workers: int = 2,
-    spatial_size: tuple = (150, 150, 150),
-):
-    """Train/val dataloaders for Task 1a multi-label mode (RUN_0002).
-
-    Returns:
-        (train_loader, val_loader, n_train, n_val)
-    """
-    train_ds = Task1aDataset(
-        csv_path, bids_root, split_pkl, "train", "train",
-        task_name=None, spatial_size=spatial_size,
-    )
-    val_ds = Task1aDataset(
-        csv_path, bids_root, split_pkl, "val", "val",
-        task_name=None, spatial_size=spatial_size,
-    )
-    train_loader = DataLoader(
-        train_ds, batch_size=batch_size, shuffle=True,
-        num_workers=num_workers, pin_memory=True,
-    )
-    val_loader = DataLoader(
-        val_ds, batch_size=batch_size, shuffle=False,
-        num_workers=num_workers, pin_memory=True,
-    )
-    return train_loader, val_loader, len(train_ds), len(val_ds)
-
-
-# ─── Task 1b ─────────────────────────────────────────────────────────────────
-
-
-def get_task1b_dataloaders(
-    data_root: str,
-    split_pkl: str,
-    batch_size: int = 2,
-    num_workers: int = 4,
-    image_suffix: str = "_ciso.nii.gz",
-    spatial_size: tuple = (96, 96, 96),
-):
-    """Train/val dataloaders for Task 1b standalone (RUN_0005).
-
-    Returns:
-        (train_loader, val_loader, n_train, n_val)
-    """
-    train_ds = Task1bDataset(
-        data_root=data_root, split_pkl=split_pkl, fold="train", stage="train",
-        image_suffix=image_suffix, spatial_size=spatial_size,
-    )
-    val_ds = Task1bDataset(
-        data_root=data_root, split_pkl=split_pkl, fold="val", stage="val",
-        image_suffix=image_suffix, spatial_size=spatial_size,
-    )
-    train_loader = DataLoader(
-        train_ds, batch_size=batch_size, shuffle=True,
-        num_workers=num_workers, pin_memory=True,
-    )
-    val_loader = DataLoader(
-        val_ds, batch_size=1, shuffle=False,
-        num_workers=max(1, num_workers // 2), pin_memory=True,
     )
     return train_loader, val_loader, len(train_ds), len(val_ds)
 
@@ -229,17 +161,22 @@ def get_multitask_dataloaders(config: dict) -> dict:
         fold="val", stage="val", task_name=None, spatial_size=spatial_size,
     )
 
-    # ── Task 1b (clean images only) ───────────────────────────────────────────
-    clean_subjects = _build_clean_subject_set(csv_path) or None
-    train_ds_1b = CleanImageDataset(
-        data_root=data_root, split_pkl=split_pkl_2, fold="train", stage="train",
+    # ── Task 1b (clean images for reconstruction head) ────────────────────────
+    # Uses Task2SegmentationDataset in image-only mode (label ignored by
+    # multitask trainer) — replaced by CycleGAN pipeline in RUN_0002.
+    clean_subjects = _build_clean_subject_set(csv_path)
+    from .task1b import Task1bCycleGANDataset
+    train_ds_1b = Task1bCycleGANDataset(
+        data_root=data_root, csv_path=csv_path, split_pkl=split_pkl_2,
+        fold="train", stage="train",
         image_suffix=image_suffix, spatial_size=spatial_size,
-        clean_subjects=clean_subjects,
+        domain="both",
     )
-    val_ds_1b = CleanImageDataset(
-        data_root=data_root, split_pkl=split_pkl_2, fold="val", stage="val",
+    val_ds_1b = Task1bCycleGANDataset(
+        data_root=data_root, csv_path=csv_path, split_pkl=split_pkl_2,
+        fold="val", stage="val",
         image_suffix=image_suffix, spatial_size=spatial_size,
-        clean_subjects=clean_subjects,
+        domain="both",
     )
 
     # ── Task 2 ───────────────────────────────────────────────────────────────

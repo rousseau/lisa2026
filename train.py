@@ -11,7 +11,6 @@ Usage
     python train.py --run 0002
     python train.py --run 0003
     python train.py --run 0004
-    python train.py --run 0005
     python train.py --run 0001 --smoke-test
 
 Run IDs accept an optional "RUN_" prefix:
@@ -45,9 +44,9 @@ RUN_REGISTRY = {
         "supports_smoke_test": True,
     },
     "0002": {
-        "task": "1a",
-        "module": "src.train_task1a_multilabel",
-        "config": "configs/run_0002_upf.yaml",
+        "task": "1b",
+        "module": "src.train_task1b",
+        "config": "configs/run_0002_cyclegan_task1b.yaml",
         "mode": "single",
         "supports_smoke_test": True,
     },

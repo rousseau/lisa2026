@@ -1,28 +1,43 @@
 # RUN_0002 — Notes
 
-## Execution Notes
+## Status
 
-- Trained on Jean Zay (H100), single GPU.
-- Single training job for all 7 tasks simultaneously.
-- Checkpoint: `outputs/checkpoints/RUN_0002/multilabel_best.pt`
+Pending training. Code complete, config ready.
 
-## Known Issues
+## Domain statistics (estimated from prior analysis)
 
-- `results/` was gitignored at the time of this run. Metrics were computed but not versioned via git.
-- **Status**: Metrics recovered from on-disk artifacts after fixing `.gitignore`. Aggregate = 0.6695.
+- Domain A (artefacted, Noise≥1 OR Motion≥1): ~60–70% of volumes
+- Domain B (clean, Noise=0 AND Motion=0): ~30–40% of volumes
 
-## Observations
+Exact counts to be confirmed when running with the actual CSV.
 
-- EMD loss naturally handles ordinal severity (none/moderate/severe) without treating distance-2 errors the same as distance-1 errors.
-- The `focal_alpha=[0.25, 0.5, 1.0]` weighting is key for Banding which has ~96% class-0 samples.
-- Single model is 7× more efficient at inference than RUN_0001.
-- Despite architectural improvements, aggregate score (0.6695) is slightly lower than RUN_0001 (0.6887).
-  - Most affected tasks: Zipper (-0.089), Motion (-0.040).
-  - Distortion improved slightly (+0.021).
-  - The multi-head shared backbone may require more epochs or task-specific LR tuning.
+## Potential issues
 
-## Next Steps
+1. **Class imbalance between domains**: Domain A may be significantly larger
+   than domain B. The dataset handles this by cycling the smaller domain
+   (modulo indexing). May need to verify balance at runtime.
 
-- Compare RUN_0002 vs RUN_0001 in detail (per-task breakdown available in metrics.json).
-- Task 2 addressed independently in RUN_0003.
-- Consider RUN_0002b: longer training + per-head LR or task-specific loss weighting.
+2. **Memory**: 3D volumes at 96³ with batch=1 should fit on GB10 (24 GB).
+   If OOM, reduce to 80³ or use gradient checkpointing in the generator.
+
+3. **Training instability**: CycleGAN on 3D data is known to be less stable
+   than 2D due to the larger parameter count. Monitor discriminator loss
+   (should not collapse to 0 or diverge). Image buffer (size 50) helps.
+
+4. **Task 2 split vs Task 1a split**: Using task2_fixed.pkl for the split.
+   If a subject appears in the Task 1a CSV but not in task2_fixed.pkl
+   (because they have no segmentation label), they will be excluded.
+   This is acceptable for a baseline.
+
+## Commands
+
+```bash
+# Training
+python train.py --run 0002
+
+# Smoke test (2 epochs, 2 batches)
+python train.py --run 0002 --smoke-test
+
+# Evaluation
+python evaluate.py --run 0002
+```

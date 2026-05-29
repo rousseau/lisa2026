@@ -1,0 +1,39 @@
+# RUN_0002 — CycleGAN Task 1b — configuration Jean Zay (4x H100 80 Go)
+# Override de la config locale run_0002_cyclegan_task1b.yaml
+# Chemins resolus via variables d'environnement LISA_DATA_ROOT / LISA_CSV_PATH
+
+run:
+  id: "0002"
+  task: "1b"
+  description: "3D CycleGAN unpaired artifact removal — noise and motion (Jean Zay)"
+
+data:
+  # Chemin override par LISA_DATA_ROOT dans le script Slurm
+  data_root: /gpfswork/rech/crp/PLACEHOLDER/LISA/data
+  csv_path: /gpfswork/rech/crp/PLACEHOLDER/LISA/data/LISA_Task1a_2026.csv
+  split_pkl: results/splits/task1a_fixed.pkl
+  image_suffix: "_ciso.nii.gz"
+  spatial_size: [96, 96, 96]
+  noise_threshold: 1
+  motion_threshold: 1
+
+model:
+  # Generator: U-Net avec bottleneck residuel
+  base_filters: 32          # (enc: 32/64/128/256)
+  n_res_blocks: 6
+  # Discriminator: PatchGAN
+  disc_base_filters: 64
+  disc_n_layers: 4
+
+training:
+  num_epochs: 100
+  decay_epoch: 50           # LR constant 50 epochs, puis decroissance lineaire
+  batch_size: 4             # 4 GPU x 1 = 4 echantillons / step (DataParallel)
+  num_workers: 8            # 40 CPUs / 5
+  learning_rate: 2.0e-4
+  lambda_cycle: 10.0
+  lambda_identity: 5.0
+
+output:
+  checkpoint_dir: outputs/checkpoints/RUN_0002
+  results_dir: results/runs/RUN_0002
