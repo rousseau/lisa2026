@@ -196,26 +196,15 @@ class Task1aOrdinalTrainer(BaseTrainer):
         metrics[self.val_metric_key] = metrics["f1"]
         return metrics
 
-    def train(self) -> None:
-        for epoch in range(self.num_epochs):
-            train_m = self.train_one_epoch()
-            val_m = self.validate()
+    def _print_epoch(self, epoch: int, train_m: dict, val_m: dict) -> None:
+        msg = (
+            f"Epoch {epoch:3d}/{self.num_epochs} | "
+            f"train_loss={train_m['loss']:.4f} val_loss={val_m['loss']:.4f} | "
+            f"val_f1={val_m['f1']:.4f} val_agg={val_m['agg']:.4f}"
+        )
+        self._print(msg)
 
-            msg = (
-                f"Epoch {epoch + 1:3d}/{self.num_epochs} | "
-                f"train_loss={train_m['loss']:.4f} val_loss={val_m['loss']:.4f} | "
-                f"val_f1={val_m['f1']:.4f} val_agg={val_m['agg']:.4f}"
-            )
-            self._print(msg)
-
-            if self.is_improvement(val_m[self.val_metric_key]):
-                self.update_best(val_m[self.val_metric_key])
-                torch.save(self.model.state_dict(), self.ckpt_path)
-                self._print(f"  -> Best checkpoint saved (F1={self.best_val_metric:.4f})")
-            elif self.increment_patience():
-                self._print(f"  -> Early stopping at epoch {epoch + 1}")
-                break
-
+    def _on_training_complete(self) -> None:
         self._print(f"\nTraining completed. Best F1: {self.best_val_metric:.4f}")
         self._log_fh.close()
 
@@ -336,32 +325,16 @@ class Task1aMultiLabelTrainer(BaseTrainer):
         result[self.val_metric_key] = result["mean_f1"]
         return result
 
-    def train(self) -> None:
-        print(f"\n{'=' * 60}\nRUN_0002 – Multi-label Training ({self.num_epochs} epochs)\n{'=' * 60}\n")
+    def _print_epoch(self, epoch: int, train_m: dict, val_m: dict) -> None:
+        print(
+            f"Epoch {epoch:03d}/{self.num_epochs:03d} | "
+            f"train_loss={train_m['loss']:.4f} | "
+            f"val_f1={val_m['mean_f1']:.4f} | {0:.0f}s"
+        )
+        if epoch % 5 == 0 or epoch == self.num_epochs:
+            for task, f1 in val_m["per_task_f1"].items():
+                print(f"    {task:<16} F1={f1:.3f}")
 
-        for epoch in range(1, self.num_epochs + 1):
-            t0 = time.time()
-            train_m = self.train_one_epoch()
-            val_m = self.validate()
-            self.scheduler.step()
-            elapsed = time.time() - t0
-
-            print(
-                f"Epoch {epoch:03d}/{self.num_epochs:03d} | "
-                f"train_loss={train_m['loss']:.4f} | "
-                f"val_f1={val_m['mean_f1']:.4f} | {elapsed:.0f}s"
-            )
-            if epoch % 5 == 0 or epoch == self.num_epochs:
-                for task, f1 in val_m["per_task_f1"].items():
-                    print(f"    {task:<16} F1={f1:.3f}")
-
-            if self.is_improvement(val_m[self.val_metric_key]):
-                self.update_best(val_m[self.val_metric_key])
-                torch.save(self.model.state_dict(), self.ckpt_path)
-                print(f"  -> New best val_f1={self.best_val_metric:.4f} – checkpoint saved")
-            elif self.increment_patience() and not self.smoke_test:
-                print(f"\nEarly stopping at epoch {epoch}")
-                break
-
+    def _on_training_complete(self) -> None:
         print(f"\nTraining complete. Best val_f1={self.best_val_metric:.4f}")
         print(f"Checkpoint: {self.ckpt_path}")

@@ -178,34 +178,3 @@ class Task1bTrainer(BaseTrainer):
 
         val_loss = total_loss / max(1, batch_idx + 1)
         return {self.val_metric_key: val_loss}
-
-    def train(self) -> None:
-        history = []
-
-        for epoch in range(self.num_epochs):
-            train_m = self.train_one_epoch()
-            val_m = self.validate()
-            self.scheduler.step()
-
-            row = {"epoch": epoch + 1, **train_m, **val_m}
-            history.append(row)
-
-            print(
-                f"Epoch {epoch + 1:03d}/{self.num_epochs:03d} | "
-                f"train_loss={train_m['train_loss']:.4f}  "
-                f"val_loss={val_m[self.val_metric_key]:.4f}"
-            )
-
-            if self.is_improvement(val_m[self.val_metric_key]):
-                self.update_best(val_m[self.val_metric_key])
-                self.save_checkpoint(epoch + 1, val_m[self.val_metric_key], self.ckpt_path)
-                print(f"  -> New best checkpoint ({self.ckpt_path})")
-            elif self.increment_patience():
-                print(f"  -> Early stopping at epoch {epoch + 1}")
-                break
-
-            if self.smoke_test:
-                break
-
-        self.save_history(history)
-        print(f"Training complete. Best val loss: {self.best_val_metric:.4f}")

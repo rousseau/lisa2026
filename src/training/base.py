@@ -174,3 +174,58 @@ class BaseTrainer(ABC):
         """
         with open(self.history_path, "w") as fh:
             json.dump(history, fh, indent=2)
+
+    # ── Generic training loop ────────────────────────────────────────────────
+
+    def train(self) -> None:
+        """Run the full training loop.
+
+        Subclasses can override ``_print_epoch()`` for custom log formatting
+        or ``_on_training_complete()`` for post-processing (e.g. closing files).
+        """
+        history = []
+        for epoch in range(self.num_epochs):
+            train_m = self.train_one_epoch()
+            val_m = self.validate()
+
+            if hasattr(self, "scheduler") and self.scheduler is not None:
+                self.scheduler.step()
+
+            row = {"epoch": epoch + 1, **train_m, **val_m}
+            history.append(row)
+
+            self._print_epoch(epoch + 1, train_m, val_m)
+
+            if self.is_improvement(val_m[self.val_metric_key]):
+                self.update_best(val_m[self.val_metric_key])
+                self.save_checkpoint(
+                    epoch + 1, val_m[self.val_metric_key], self.ckpt_path
+                )
+                print(f"  -> New best checkpoint ({self.ckpt_path})")
+            elif self.increment_patience():
+                print(f"  -> Early stopping at epoch {epoch + 1}")
+                break
+
+            if self.smoke_test:
+                break
+
+        self.save_history(history)
+        self._on_training_complete()
+        print(
+            f"Training complete. Best {self.val_metric_key}: "
+            f"{self.best_val_metric:.4f}"
+        )
+
+    def _print_epoch(self, epoch: int, train_m: dict, val_m: dict) -> None:
+        """Print a one-line summary for the current epoch.
+
+        Subclasses may override for custom formatting.
+        """
+        parts = [f"Epoch {epoch:03d}/{self.num_epochs:03d}"]
+        parts.append(", ".join(f"{k}={v:.4f}" for k, v in train_m.items()))
+        parts.append(", ".join(f"{k}={v:.4f}" for k, v in val_m.items()))
+        print(" | ".join(parts))
+
+    def _on_training_complete(self) -> None:
+        """Hook called after training finishes (default: no-op)."""
+        pass

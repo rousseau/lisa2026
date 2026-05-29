@@ -44,6 +44,15 @@ class Task2Trainer(BaseTrainer):
         self.ckpt_path = os.path.join(self.ckpt_dir, "task2_dynunet_best.pt")
         self.history_path = os.path.join(self.results_dir, "training_history.json")
 
+        # Run metadata (prepended to training history)
+        self.run_meta = {
+            "run_id": self.config.get("run_id", "0003"),
+            "pretrained_checkpoint_loaded": self.pretrained_loaded,
+            "device": self.device,
+            "num_classes": self.num_classes,
+            "filters": list(self.config["model"].get("filters", [])),
+        }
+
         # Symmetry consistency
         self.symmetry_weight = float(config["training"].get("symmetry_consistency_weight", 0.0))
         self.symmetry_flip_axes = [int(ax) for ax in config["training"].get("symmetry_flip_axes", [])]
@@ -221,43 +230,16 @@ class Task2Trainer(BaseTrainer):
         dice_metric.reset()
         return {self.val_metric_key: val_dice, "val_loss": total_loss / max(1, batch_idx + 1)}
 
-    def train(self) -> None:
-        run_meta = {
-            "run_id": self.config.get("run_id", "0003"),
-            "pretrained_checkpoint_loaded": self.pretrained_loaded,
-            "device": self.device,
-            "num_classes": self.num_classes,
-            "filters": list(self.config["model"].get("filters", [])),
-        }
-        history = [run_meta]
+    def _print_epoch(self, epoch: int, train_m: dict, val_m: dict) -> None:
+        print(
+            f"Epoch {epoch:03d}/{self.num_epochs:03d} | "
+            f"train_loss={train_m['train_loss']:.4f} "
+            f"val_loss={val_m['val_loss']:.4f} "
+            f"val_dice={val_m['val_dice']:.4f}"
+        )
 
-        for epoch in range(self.num_epochs):
-            train_m = self.train_one_epoch()
-            val_m = self.validate()
-            self.scheduler.step()
-
-            row = {"epoch": epoch + 1, **train_m, **val_m}
-            history.append(row)
-
-            print(
-                f"Epoch {epoch + 1:03d}/{self.num_epochs:03d} | "
-                f"train_loss={train_m['train_loss']:.4f} "
-                f"val_loss={val_m['val_loss']:.4f} "
-                f"val_dice={val_m['val_dice']:.4f}"
-            )
-
-            if self.is_improvement(val_m[self.val_metric_key]):
-                self.update_best(val_m[self.val_metric_key])
-                self.save_checkpoint(epoch + 1, val_m[self.val_metric_key], self.ckpt_path)
-                print(f"  -> New best checkpoint ({self.ckpt_path})")
-            elif self.increment_patience():
-                print(f"  -> Early stopping at epoch {epoch + 1}")
-                break
-
-            if self.smoke_test:
-                break
-
+    def save_history(self, history: list) -> None:
+        """Override to prepend run metadata."""
         with open(self.history_path, "w") as f:
             import json as _json
-            _json.dump(history, f, indent=2)
-        print(f"Training completed. Best val Dice: {self.best_val_metric:.4f}")
+            _json.dump([self.run_meta] + history, f, indent=2)
