@@ -41,7 +41,7 @@ EVAL_REGISTRY = {
         "metrics_module": "src.compute_metrics",
         "config": "configs/run_0001_baseline.yaml",
         "mode": "task1a_single_model",
-        "supports_smoke_test": False,
+        "supports_smoke_test": True,
     },
     "0002": {
         "task": "1a",
@@ -63,13 +63,6 @@ EVAL_REGISTRY = {
         "eval_module": "src.evaluate_multitask",
         "config": "configs/run_0004_multitask.yaml",
         "mode": "multitask",
-        "supports_smoke_test": True,
-    },
-    "0005": {
-        "task": "1b",
-        "eval_module": "src.evaluate_task1b",
-        "config": "configs/run_0005_task1b_unet.yaml",
-        "mode": "task1b",
         "supports_smoke_test": True,
     },
 }

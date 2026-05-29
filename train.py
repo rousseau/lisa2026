@@ -42,7 +42,7 @@ RUN_REGISTRY = {
             "Contrast",
             "Distortion",
         ],
-        "supports_smoke_test": False,
+        "supports_smoke_test": True,
     },
     "0002": {
         "task": "1a",
@@ -62,13 +62,6 @@ RUN_REGISTRY = {
         "task": "1a+1b+2",
         "module": "src.train_multitask",
         "config": "configs/run_0004_multitask.yaml",
-        "mode": "single",
-        "supports_smoke_test": True,
-    },
-    "0005": {
-        "task": "1b",
-        "module": "src.train_task1b",
-        "config": "configs/run_0005_task1b_unet.yaml",
         "mode": "single",
         "supports_smoke_test": True,
     },

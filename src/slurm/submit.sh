@@ -4,17 +4,19 @@
 #
 # Les directives #SBATCH sont statiques et ne peuvent pas contenir de variables
 # shell. Ce script injecte --job-name, --output et --error dynamiquement via
-# la ligne de commande sbatch, de sorte que les logs contiennent le run ID.
+# la ligne de commande sbatch.
 #
 # Usage (depuis la racine du projet) :
+#   bash src/slurm/submit.sh --run 0001
 #   bash src/slurm/submit.sh --run 0004
-#   bash src/slurm/submit.sh --run 0003
 #   bash src/slurm/submit.sh --run 0004 --smoke-test
 #   bash src/slurm/submit.sh --run 0001 --time 48:00:00
 #
-# Les logs seront nommés :
-#   outputs/logs/run0004_<JOBID>.out
-#   outputs/logs/run0004_<JOBID>.err
+# Les logs seront organisés par RUN ID :
+#   outputs/logs/RUN_0004/<JOBID>.out
+#   outputs/logs/RUN_0004/<JOBID>.err
+#
+# Récupération automatique affichée après soumission.
 # =============================================================================
 
 set -euo pipefail
@@ -47,28 +49,17 @@ if [[ -z "$RUN_ID" ]]; then
     exit 1
 fi
 
-case "$RUN_ID" in
-    0001|0002|0003|0004) ;;
-    *) echo "[ERREUR] Run inconnu : $RUN_ID. Valides : 0001 0002 0003 0004"; exit 1 ;;
-esac
-
-# ── Sélection du script Slurm ─────────────────────────────────────────────────
-if [[ "$RUN_ID" == "0004" ]]; then
-    SLURM_SCRIPT="src/slurm/run_0004_multitask.slurm"
-else
-    SLURM_SCRIPT="src/slurm/lisa_jeanzay.slurm"
-fi
+# ── Script Slurm unique ───────────────────────────────────────────────────────
+SLURM_SCRIPT="src/slurm/lisa_jeanzay.slurm"
 
 # ── Noms de logs avec run ID ──────────────────────────────────────────────────
-JOB_NAME="lisa2026_run${RUN_ID}"
-LOG_OUT="outputs/logs/${JOB_NAME}_%j.out"
-LOG_ERR="outputs/logs/${JOB_NAME}_%j.err"
+LOG_OUT="outputs/logs/RUN_${RUN_ID}/%j.out"
+LOG_ERR="outputs/logs/RUN_${RUN_ID}/%j.err"
 
-mkdir -p outputs/logs
+mkdir -p "outputs/logs/RUN_${RUN_ID}"
 
 # ── Construction de la commande sbatch ───────────────────────────────────────
 SBATCH_ARGS=(
-    --job-name="$JOB_NAME"
     --output="$LOG_OUT"
     --error="$LOG_ERR"
 )
@@ -78,8 +69,7 @@ SBATCH_ARGS=(
 echo "======================================================================="
 echo "  LISA 2026 — Soumission RUN_${RUN_ID}"
 echo "  Script  : $SLURM_SCRIPT"
-echo "  Job     : $JOB_NAME"
-echo "  Logs    : outputs/logs/${JOB_NAME}_<JOBID>.{out,err}"
+echo "  Logs    : outputs/logs/RUN_${RUN_ID}/<JOBID>.{out,err}"
 [[ -n "$SMOKE_FLAG" ]] && echo "  Mode    : SMOKE TEST"
 [[ -n "$TIME_OVERRIDE" ]] && echo "  Durée   : $TIME_OVERRIDE (override)"
 echo "======================================================================="
@@ -91,6 +81,21 @@ echo "$JOB_OUTPUT"
 JOB_ID=$(echo "$JOB_OUTPUT" | grep -oP '(?<=Submitted batch job )\d+')
 if [[ -n "$JOB_ID" ]]; then
     echo ""
-    echo "  Suivi   : squeue -j $JOB_ID"
-    echo "  Logs    : tail -f outputs/logs/${JOB_NAME}_${JOB_ID}.out"
+    echo "  Suivi     : squeue -j $JOB_ID"
+    echo "  Logs      : tail -f outputs/logs/RUN_${RUN_ID}/${JOB_ID}.out"
+    echo ""
+    echo "── Récupération (à coller sur votre machine locale) ──────────────────"
+    echo "  mkdir -p outputs/checkpoints/RUN_${RUN_ID} outputs/logs/RUN_${RUN_ID} results/runs/RUN_${RUN_ID}"
+    echo "  scp -rp -o ProxyCommand=\"ssh froussea@ssh.telecom-bretagne.eu nc %h %p\" \\"
+    echo "    ulq73oz@jean-zay.idris.fr:${PROJECT_ROOT}/outputs/checkpoints/RUN_${RUN_ID}/ \\"
+    echo "    outputs/checkpoints/RUN_${RUN_ID}/"
+    echo ""
+    echo "  scp -rp -o ProxyCommand=\"ssh froussea@ssh.telecom-bretagne.eu nc %h %p\" \\"
+    echo "    ulq73oz@jean-zay.idris.fr:${PROJECT_ROOT}/outputs/logs/RUN_${RUN_ID}/ \\"
+    echo "    outputs/logs/RUN_${RUN_ID}/"
+    echo ""
+    echo "  scp -rp -o ProxyCommand=\"ssh froussea@ssh.telecom-bretagne.eu nc %h %p\" \\"
+    echo "    ulq73oz@jean-zay.idris.fr:${PROJECT_ROOT}/results/runs/RUN_${RUN_ID}/ \\"
+    echo "    results/runs/RUN_${RUN_ID}/"
+    echo "======================================================================="
 fi

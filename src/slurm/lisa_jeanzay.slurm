@@ -2,14 +2,14 @@
 # =============================================================================
 # Script SLURM générique — LISA 2026 sur Jean Zay (H100 SXM5 80 GB)
 #
-# Usage (depuis la racine du projet) :
-#   bash src/slurm/submit.sh --run 0004          ← recommandé
-#   bash src/slurm/submit.sh --run 0003
-#   bash src/slurm/submit.sh --run 0004 --smoke-test
+# Usage recommandé (depuis la racine du projet) :
+#   bash src/slurm/submit.sh --run <ID> [--smoke-test] [--time HH:MM:SS]
 #
-# Lancement direct (sans run ID dans le nom du log) :
+# Lancement direct (logs flat, pas de RUN_ dans le nom) :
 #   sbatch src/slurm/lisa_jeanzay.slurm --run 0001
-#   sbatch src/slurm/lisa_jeanzay.slurm --run 0004          ← multi-task
+#   sbatch src/slurm/lisa_jeanzay.slurm --run 0004
+#
+# Le run ID est validé par train.py / evaluate.py ; aucune whitelist ici.
 # =============================================================================
 
 #SBATCH --job-name=lisa2026
@@ -43,7 +43,6 @@ while [[ $# -gt 0 ]]; do
         --smoke-test) SMOKE_FLAG="--smoke-test"; shift ;;
         --help|-h)
             echo "Usage: sbatch src/slurm/lisa_jeanzay.slurm --run <ID> [--smoke-test]"
-            echo "  <ID> : 0001 | 0002 | 0003 | 0004"
             exit 0 ;;
         *) echo "[WARN] argument inconnu ignoré : $1"; shift ;;
     esac
@@ -51,11 +50,6 @@ done
 
 # Normalise RUN_0003 → 0003
 RUN_ID="${RUN_ID#RUN_}"
-
-case "$RUN_ID" in
-    0001|0002|0003|0004) ;;
-    *) echo "[ERREUR] Run inconnu : $RUN_ID. Valides : 0001 0002 0003 0004"; exit 1 ;;
-esac
 
 # ── Chemins données ───────────────────────────────────────────────────────────
 DATA_ROOT="${LISA_DATA_ROOT:-${WORK}/LISA/data}"
@@ -156,5 +150,21 @@ echo "======================================================================="
 echo "  TERMINÉ — RUN_${RUN_ID}"
 echo "  Durée totale : $(( ($(date +%s) - T0) / 60 )) min"
 echo "  Métriques    : results/runs/RUN_${RUN_ID}/metrics.json"
+echo "  Checkpoints  : outputs/checkpoints/RUN_${RUN_ID}/"
+echo "  Logs Slurm   : outputs/logs/RUN_${RUN_ID}/"
 echo "  Fin          : $(date)"
+echo "======================================================================="
+echo ""
+echo "── Récupération (depuis la machine locale) ────────────────────────────"
+echo "  scp -rp -o ProxyCommand=\"ssh froussea@ssh.telecom-bretagne.eu nc %h %p\" \\"
+echo "    ulq73oz@jean-zay.idris.fr:$PROJECT_ROOT/outputs/checkpoints/RUN_${RUN_ID}/ \\"
+echo "    outputs/checkpoints/RUN_${RUN_ID}/"
+echo ""
+echo "  scp -rp -o ProxyCommand=\"ssh froussea@ssh.telecom-bretagne.eu nc %h %p\" \\"
+echo "    ulq73oz@jean-zay.idris.fr:$PROJECT_ROOT/outputs/logs/RUN_${RUN_ID}/ \\"
+echo "    outputs/logs/RUN_${RUN_ID}/"
+echo ""
+echo "  scp -rp -o ProxyCommand=\"ssh froussea@ssh.telecom-bretagne.eu nc %h %p\" \\"
+echo "    ulq73oz@jean-zay.idris.fr:$PROJECT_ROOT/results/runs/RUN_${RUN_ID}/ \\"
+echo "    results/runs/RUN_${RUN_ID}/"
 echo "======================================================================="
