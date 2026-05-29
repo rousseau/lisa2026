@@ -1,12 +1,12 @@
 #!/bin/bash
 # =============================================================================
-# jz_sync.sh — Transferts local ↔ Jean Zay — LISA 2026
+# sync_from_jeanzay.sh — Transferts local ↔ Jean Zay — LISA 2026
 #
 # Usage (depuis la racine du projet) :
-#   bash src/slurm/jz_sync.sh push_data              # données NIfTI → Jean Zay
-#   bash src/slurm/jz_sync.sh push_splits            # splits → Jean Zay
-#   bash src/slurm/jz_sync.sh pull_run --run 0002    # résultats RUN_0002 ← Jean Zay
-#   bash src/slurm/jz_sync.sh pull_all               # tous les runs ← Jean Zay
+#   bash src/slurm/sync_from_jeanzay.sh push_data              # données NIfTI → Jean Zay
+#   bash src/slurm/sync_from_jeanzay.sh push_splits            # splits → Jean Zay
+#   bash src/slurm/sync_from_jeanzay.sh pull_run --run 0002    # résultats RUN_0002 ← Jean Zay
+#   bash src/slurm/sync_from_jeanzay.sh pull_all               # tous les runs ← Jean Zay
 # =============================================================================
 
 set -e
@@ -76,7 +76,7 @@ case "$CMD" in
     ;;
 
   help|*)
-    echo "Usage: bash src/slurm/jz_sync.sh <commande> [--run <ID>]"
+    echo "Usage: bash src/slurm/sync_from_jeanzay.sh <commande> [--run <ID>]"
     echo ""
     echo "Upload (local → Jean Zay) :"
     echo "  push_data              Données NIfTI ~/Data/LISA2026/"
