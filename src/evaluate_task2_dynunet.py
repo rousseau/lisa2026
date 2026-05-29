@@ -1,37 +1,32 @@
 #!/usr/bin/env python
-"""Evaluate DynUNet baseline for LISA 2026 Task 2 (RUN_0003)."""
+"""Evaluate DynUNet baseline for LISA 2026 Task 2 (RUN_0003).
+
+Evaluation metrics are computed inline via ``src.evaluation.evaluate_task2``.
+"""
 
 import argparse
 import json
 import os
 
-import numpy as np
-import pandas as pd
 import torch
-import yaml
-from monai.metrics import compute_average_surface_distance, compute_hausdorff_distance
-from tqdm import tqdm
 
 from src.datasets import get_task2_seg_dataloaders
+from src.evaluation import load_config, get_device, evaluate_task2
 from src.models import Task2DynUNetModel
-from src.utils.metrics.segmentation import (
-    dice_binary,
-    compute_rve,
-    keep_largest_connected_per_class,
-    infer_logits_tta,
-)
 
 
 def to_3tuple(values):
     return tuple(int(v) for v in values)
 
 
-@torch.no_grad()
-def evaluate(config: dict, smoke_test: bool = False):
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    use_amp = (
-        bool(config["environment"].get("mixed_precision", True)) and device == "cuda"
-    )
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str, default="configs/run_0003_task2_dynunet.yaml")
+    parser.add_argument("--smoke_test", action="store_true")
+    args = parser.parse_args()
+
+    config = load_config(args.config)
+    device, use_amp = get_device(config)
 
     data_root = os.getenv("LISA_DATA_ROOT", config["data"]["data_root"])
     split_pkl = os.getenv("LISA_TASK2_SPLIT_PKL", config["data"]["split_pkl"])
@@ -50,204 +45,44 @@ def evaluate(config: dict, smoke_test: bool = False):
 
     model_cfg = config["model"]
     num_classes = int(model_cfg["out_channels"])
-
     model = Task2DynUNetModel(
         in_channels=int(model_cfg["in_channels"]),
         out_channels=num_classes,
         kernel_size=tuple(tuple(int(x) for x in ks) for ks in model_cfg["kernel_size"]),
         strides=tuple(tuple(int(x) for x in st) for st in model_cfg["strides"]),
-        upsample_kernel_size=tuple(
-            tuple(int(x) for x in st) for st in model_cfg["upsample_kernel_size"]
-        ),
+        upsample_kernel_size=tuple(tuple(int(x) for x in st) for st in model_cfg["upsample_kernel_size"]),
         filters=tuple(int(x) for x in model_cfg["filters"]),
         norm_name=model_cfg.get("norm_name", "instance"),
         deep_supervision=bool(model_cfg.get("deep_supervision", False)),
     ).to(device)
 
-    ckpt_path = os.path.join(
-        config["output"]["checkpoint_dir"], "task2_dynunet_best.pt"
-    )
+    ckpt_path = os.path.join(config["output"]["checkpoint_dir"], "task2_dynunet_best.pt")
     if not os.path.exists(ckpt_path):
         raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
-
     state = torch.load(ckpt_path, map_location=device)
-    model.load_state_dict(state["model_state_dict"])
+    model.load_state_dict(state["model_state_dict"] if "model_state_dict" in state else state)
     model.eval()
 
-    roi_size = to_3tuple(config["data"]["val_roi_size"])
-    overlap = float(config["inference"]["overlap"])
-    sw_batch_size = int(config["inference"]["sw_batch_size"])
-    tta_axes = config["inference"].get("tta_flip_axes", [])
-    keep_largest_component = bool(
-        config["inference"].get("keep_largest_component", False)
-    )
-
-    results_rows = []
-
-    for batch_idx, batch in enumerate(tqdm(val_loader, desc="Eval")):
-        image = batch["img"].to(device)
-        label = batch["label"].to(device).long()
-        subject = batch["subject"][0]
-
-        logits = infer_logits_tta(
-            model=model,
-            image=image,
-            roi_size=roi_size,
-            overlap=overlap,
-            sw_batch_size=sw_batch_size,
-            use_amp=use_amp,
-            tta_axes=tta_axes,
-        )
-
-        pred = torch.argmax(logits, dim=1).cpu()
-
-        # Determine collapse_labels from config
-        collapse_labels = bool(config["data"].get("collapse_labels", False))
-
-        # For collapsed labels, evaluate on collapsed classes (1–6).
-        # For 12-class models, predictions are already in the correct label space;
-        # no remapping is needed or valid here.
-        if collapse_labels:
-            num_classes = 7  # collapsed classes: bg(0) + 6 structures
-        else:
-            num_classes = int(config["model"]["out_channels"])  # typically 12
-
-        if keep_largest_component:
-            pred_np = pred.squeeze(0).numpy().astype(np.int16)
-            pred_np = keep_largest_connected_per_class(pred_np, num_classes=num_classes)
-            pred = torch.from_numpy(pred_np[None])
-        target = label.squeeze(1).cpu()
-
-        # Evaluate on collapsed classes (1-6) or original classes (1-11)
-        if collapse_labels:
-            eval_classes = list(range(1, 7))  # collapsed classes
-        else:
-            eval_classes = list(range(1, num_classes))
-
-        for class_id in eval_classes:
-            pred_bin = pred == class_id
-            target_bin = target == class_id
-
-            pred_has = bool(pred_bin.any())
-            target_has = bool(target_bin.any())
-
-            if not pred_has and not target_has:
-                dsc = 1.0
-                hd95 = 0.0
-                hd = 0.0
-                assd = 0.0
-                rve = 0.0
-            elif pred_has and target_has:
-                dsc = dice_binary(pred_bin, target_bin)
-
-                pred_metric = pred_bin.unsqueeze(1).float()
-                target_metric = target_bin.unsqueeze(1).float()
-
-                hd95_t = compute_hausdorff_distance(
-                    y_pred=pred_metric,
-                    y=target_metric,
-                    include_background=True,
-                    percentile=95,
-                )
-                hd_t = compute_hausdorff_distance(
-                    y_pred=pred_metric,
-                    y=target_metric,
-                    include_background=True,
-                    percentile=None,
-                )
-                assd_t = compute_average_surface_distance(
-                    y_pred=pred_metric,
-                    y=target_metric,
-                    include_background=True,
-                    symmetric=True,
-                )
-
-                hd95 = float(
-                    torch.nan_to_num(hd95_t, nan=0.0, posinf=1e6, neginf=0.0).item()
-                )
-                hd = float(
-                    torch.nan_to_num(hd_t, nan=0.0, posinf=1e6, neginf=0.0).item()
-                )
-                assd = float(
-                    torch.nan_to_num(assd_t, nan=0.0, posinf=1e6, neginf=0.0).item()
-                )
-                rve = compute_rve(pred_bin, target_bin)
-            else:
-                dsc = 0.0
-                hd95 = np.nan
-                hd = np.nan
-                assd = np.nan
-                rve = compute_rve(pred_bin, target_bin)
-
-            results_rows.append(
-                {
-                    "subject": subject,
-                    "class_id": class_id,
-                    "dsc": dsc,
-                    "hd95": hd95,
-                    "hd": hd,
-                    "rve": rve,
-                    "assd": assd,
-                }
-            )
-
-        if smoke_test:
-            break
-
-    df = pd.DataFrame(results_rows)
-
-    class_summary = (
-        df.groupby("class_id")[["dsc", "hd95", "hd", "rve", "assd"]]
-        .mean(numeric_only=True)
-        .reset_index()
-        .to_dict(orient="records")
-    )
-
-    global_summary = {
-        "mean_dsc": float(np.nanmean(df["dsc"].values)),
-        "mean_hd95": float(np.nanmean(df["hd95"].values)),
-        "mean_hd": float(np.nanmean(df["hd"].values)),
-        "mean_rve": float(np.nanmean(df["rve"].values)),
-        "mean_assd": float(np.nanmean(df["assd"].values)),
-        "n_subjects": int(df["subject"].nunique()),
-        "n_classes_eval": int(df["class_id"].nunique()),
-    }
-
-    output_dir = config["output"]["results_dir"]
-    os.makedirs(output_dir, exist_ok=True)
-
-    predictions_file = os.path.join(output_dir, "predictions_val_task2.csv")
-    metrics_file = os.path.join(output_dir, "metrics.json")
-
-    df.to_csv(predictions_file, index=False)
+    results = evaluate_task2(model, val_loader, config, device, smoke_test=args.smoke_test)
 
     payload = {
         "run_id": config.get("run_id", "0003"),
         "task": "task2",
         "model": "dynunet",
-        "global": global_summary,
-        "per_class": class_summary,
+        **results,
     }
 
-    with open(metrics_file, "w") as f:
-        json.dump(payload, f, indent=2)
+    out_dir = config["output"]["results_dir"]
+    os.makedirs(out_dir, exist_ok=True)
+    metrics_path = os.path.join(out_dir, "metrics.json")
+    with open(metrics_path, "w") as fh:
+        json.dump(payload, fh, indent=2)
 
-    print(f"Evaluation complete. Metrics saved to {metrics_file}")
-    print(json.dumps(global_summary, indent=2))
-
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--config", type=str, default="configs/run_0003_task2_dynunet.yaml"
-    )
-    parser.add_argument("--smoke_test", action="store_true")
-    args = parser.parse_args()
-
-    with open(args.config, "r") as f:
-        config = yaml.safe_load(f)
-
-    evaluate(config=config, smoke_test=args.smoke_test)
+    print(f"\n✓ Metrics saved to {metrics_path}")
+    g = results["global"]
+    print(f"  mean DSC  : {g['mean_dsc']:.4f}")
+    print(f"  mean HD95 : {g['mean_hd95']:.2f}")
+    print(f"  mean ASSD : {g['mean_assd']:.2f}")
 
 
 if __name__ == "__main__":

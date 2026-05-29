@@ -3,7 +3,7 @@
 Unified evaluation entry point for LISA 2026.
 
 All evaluation scripts live in src/ and are invoked as Python modules so that
-their `from src.xxx import ...` imports always resolve from the project root.
+their ``from src.xxx import ...`` imports always resolve from the project root.
 
 Usage
 -----
@@ -11,7 +11,6 @@ Usage
     python evaluate.py --run 0002
     python evaluate.py --run 0003
     python evaluate.py --run 0004
-    python evaluate.py --run 0005
     python evaluate.py --run 0001 --smoke-test
 
 Run IDs accept an optional "RUN_" prefix:
@@ -21,56 +20,38 @@ Run IDs accept an optional "RUN_" prefix:
 import argparse
 import sys
 
-import yaml
-
 from src.utils import normalise_run_id, run_cmd, smoke_args as _smoke_args_util
 
 # ---------------------------------------------------------------------------
 # Evaluation registry
 # ---------------------------------------------------------------------------
-# mode:
-#   "task1a_single_model"  – src.evaluate_task1a  then src.compute_metrics
-#   "task1a_multilabel"    – src.evaluate_task1a_multilabel  then src.compute_metrics
-#   "task2"                – src.evaluate_task2_dynunet  (single pass)
-#   "task1b"               – src.evaluate_task1b  (single pass)
 
 EVAL_REGISTRY = {
     "0001": {
         "task": "1a",
         "eval_module": "src.evaluate_task1a",
-        "metrics_module": "src.compute_metrics",
         "config": "configs/run_0001_baseline.yaml",
-        "mode": "task1a_single_model",
         "supports_smoke_test": True,
     },
     "0002": {
         "task": "1a",
         "eval_module": "src.evaluate_task1a_multilabel",
-        "metrics_module": "src.compute_metrics",
         "config": "configs/run_0002_upf.yaml",
-        "mode": "task1a_multilabel",
         "supports_smoke_test": True,
     },
     "0003": {
         "task": "2",
         "eval_module": "src.evaluate_task2_dynunet",
         "config": "configs/run_0003_task2_dynunet.yaml",
-        "mode": "task2",
         "supports_smoke_test": True,
     },
     "0004": {
         "task": "1a+1b+2",
         "eval_module": "src.evaluate_multitask",
         "config": "configs/run_0004_multitask.yaml",
-        "mode": "multitask",
         "supports_smoke_test": True,
     },
 }
-
-
-# ---------------------------------------------------------------------------
-# Helpers — thin wrappers around src.utils to preserve local names
-# ---------------------------------------------------------------------------
 
 
 def _run(cmd: list[str]) -> None:
@@ -79,81 +60,6 @@ def _run(cmd: list[str]) -> None:
 
 def _smoke_args(entry: dict, smoke_test: bool) -> list[str]:
     return _smoke_args_util(entry, smoke_test)
-
-
-def _load_config(path: str) -> dict:
-    try:
-        with open(path) as fh:
-            return yaml.safe_load(fh)
-    except FileNotFoundError:
-        print(f"[ERROR] Config not found: {path}")
-        sys.exit(1)
-
-
-# ---------------------------------------------------------------------------
-# Evaluation dispatch
-# ---------------------------------------------------------------------------
-
-
-def evaluate_task1a(entry: dict, smoke_test: bool) -> None:
-    """Two-step: generate predictions, then compute metrics."""
-    config_path = entry["config"]
-    cfg = _load_config(config_path)
-    smoke_extra = _smoke_args(entry, smoke_test)
-
-    print(f"\n[1/2] Generating predictions")
-    _run(
-        [sys.executable, "-m", entry["eval_module"], "--config", config_path]
-        + smoke_extra
-    )
-
-    print(f"\n[2/2] Computing metrics")
-    _run(
-        [
-            sys.executable,
-            "-m",
-            entry["metrics_module"],
-            "--predictions",
-            cfg["output"]["predictions_file"],
-            "--ground-truth",
-            cfg["data"]["csv_path"],
-            "--output",
-            cfg["output"]["metrics_file"],
-            "--run-id",
-            str(cfg.get("run_id", "unknown")),
-        ]
-    )
-    print(f"\n[OK] Evaluation complete.")
-
-
-def evaluate_task2(entry: dict, smoke_test: bool) -> None:
-    smoke_extra = _smoke_args(entry, smoke_test)
-    print(f"\n[1/1] Running Task 2 evaluation")
-    _run(
-        [sys.executable, "-m", entry["eval_module"], "--config", entry["config"]]
-        + smoke_extra
-    )
-    print(f"\n[OK] Evaluation complete.")
-
-
-def evaluate_multitask(entry: dict, smoke_test: bool) -> None:
-    smoke_extra = _smoke_args(entry, smoke_test)
-    print(f"\n[1/1] Running multi-task evaluation (Tasks 1a, 1b, 2)")
-    _run(
-        [sys.executable, "-m", entry["eval_module"], "--config", entry["config"]]
-        + smoke_extra
-    )
-    print(f"\n[OK] Evaluation complete.")
-
-
-def evaluate_task1b(entry: dict, smoke_test: bool) -> None:
-    smoke_extra = _smoke_args(entry, smoke_test)
-    print(f"\n[1/1] Running Task 1b evaluation")
-    _run(
-        [sys.executable, "-m", entry["eval_module"], "--config", entry["config"]]
-        + smoke_extra
-    )
-    print(f"\n[OK] Evaluation complete.")
 
 
 # ---------------------------------------------------------------------------
@@ -196,18 +102,12 @@ def main() -> None:
     if args.smoke_test:
         print(f"  Mode   : SMOKE TEST")
 
-    mode = entry["mode"]
-    if mode in ("task1a_single_model", "task1a_multilabel"):
-        evaluate_task1a(entry, smoke_test=args.smoke_test)
-    elif mode == "task2":
-        evaluate_task2(entry, smoke_test=args.smoke_test)
-    elif mode == "multitask":
-        evaluate_multitask(entry, smoke_test=args.smoke_test)
-    elif mode == "task1b":
-        evaluate_task1b(entry, smoke_test=args.smoke_test)
-    else:
-        print(f"[ERROR] Unknown mode '{mode}'.")
-        sys.exit(1)
+    smoke_extra = _smoke_args(entry, args.smoke_test)
+    _run(
+        [sys.executable, "-m", entry["eval_module"], "--config", entry["config"]]
+        + smoke_extra
+    )
+    print(f"\n[OK] Evaluation completed.")
 
 
 if __name__ == "__main__":

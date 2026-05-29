@@ -1,100 +1,83 @@
 #!/usr/bin/env python
+"""RUN_0001 — Task 1a ordinal evaluation (inline metrics).
+
+Loads the 7 independent ordinal classifiers, infers on the validation set,
+computes per-artifact and global metrics directly, and writes ``metrics.json``.
 """
-Evaluate Task 1a models on validation set
-"""
+
 import argparse
+import json
 import os
-import yaml
-import pandas as pd
-import numpy as np
+
 import torch
 from torch.utils.data import DataLoader
+
 from src.datasets import Task1aDataset
+from src.evaluation import load_config, get_device, evaluate_task1a_ordinal
 from src.models import Task1aOrdinalModel
 
 
-def evaluate(config, task_names, split='val'):
-    """Evaluate all task models"""
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    ckpt_dir = config['output']['checkpoint_dir']
-    
-    predictions_data = []
-    
-    for task in task_names:
-        print(f"\nEvaluating {task}...")
-        
-        # Load model
-        model = Task1aOrdinalModel().to(device)
-        ckpt_path = os.path.join(ckpt_dir, f"{task}_best.pt")
-        if not os.path.exists(ckpt_path):
-            print(f"  ⚠ Checkpoint not found: {ckpt_path}")
-            continue
-        model.load_state_dict(torch.load(ckpt_path, map_location=device))
-        model.eval()
-        
-        # Load data
-        dataset = Task1aDataset(
-            csv_path=config['data']['csv_path'],
-            bids_root=config['data']['bids_root'],
-            split_pkl=config['data']['split_pkl'],
-            fold=split,
-            task_name=task,
-            stage='val'
-        )
-        loader = DataLoader(dataset, batch_size=8, shuffle=False, num_workers=2)
-        
-        # Predict
-        all_filenames = []
-        all_preds = []
-        all_labels = []
-        
-        with torch.no_grad():
-            for batch in loader:
-                img = batch['img'].to(device).float()
-                filenames = batch['filename']
-                labels = batch['label'].cpu().numpy()
-                
-                logits = model(img)
-                preds = torch.argmax(logits, dim=1).cpu().numpy()
-                
-                all_filenames.extend(filenames)
-                all_preds.extend(preds)
-                all_labels.extend(labels)
-        
-        # Store predictions
-        if not predictions_data:
-            for i, fn in enumerate(all_filenames):
-                predictions_data.append({'filename': fn})
-        
-        for i, (fn, pred) in enumerate(zip(all_filenames, all_preds)):
-            for j, data in enumerate(predictions_data):
-                if data['filename'] == fn:
-                    data[task] = pred
-                    break
-        
-        print(f"  ✓ {task}: {len(all_preds)} predictions")
-    
-    # Save predictions CSV
-    output_csv = config['output']['predictions_file']
-    os.makedirs(os.path.dirname(output_csv), exist_ok=True)
-    df = pd.DataFrame(predictions_data)
-    df.to_csv(output_csv, index=False)
-    print(f"\n✓ Predictions saved to {output_csv}")
-    
-    return output_csv
+TASK_ORDER = [
+    "Noise", "Zipper", "Positioning",
+    "Banding", "Motion", "Contrast", "Distortion",
+]
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', type=str, default='configs/run_0001_baseline.yaml')
+    parser.add_argument("--config", type=str, default="configs/run_0001_baseline.yaml")
+    parser.add_argument("--smoke_test", action="store_true")
     args = parser.parse_args()
-    
-    with open(args.config) as f:
-        config = yaml.safe_load(f)
-    
-    task_names = config['tasks']
-    evaluate(config, task_names, split='val')
+
+    config = load_config(args.config)
+    if args.smoke_test:
+        print("⚡ SMOKE TEST MODE")
+
+    device, _ = get_device(config)
+    ckpt_dir = config["output"]["checkpoint_dir"]
+    csv_path = config["data"]["csv_path"]
+    bids_root = config["data"]["bids_root"]
+    split_pkl = config["data"]["split_pkl"]
+
+    def _make_loader(task: str):
+        ds = Task1aDataset(
+            csv_path=csv_path,
+            bids_root=bids_root,
+            split_pkl=split_pkl,
+            fold="val",
+            task_name=task,
+            stage="val",
+        )
+        return DataLoader(ds, batch_size=8, shuffle=False, num_workers=2)
+
+    results = evaluate_task1a_ordinal(
+        model_factory=Task1aOrdinalModel,
+        task_order=TASK_ORDER,
+        val_loader_factory=_make_loader,
+        ckpt_dir=ckpt_dir,
+        device=device,
+        smoke_test=args.smoke_test,
+    )
+
+    payload = {
+        "run_id": config.get("run_id", "0001"),
+        "task": "1a",
+        "mode": "ordinal",
+        **results,
+    }
+
+    out_dir = config["output"]["results_dir"]
+    os.makedirs(out_dir, exist_ok=True)
+    metrics_path = os.path.join(out_dir, "metrics.json")
+    with open(metrics_path, "w") as fh:
+        json.dump(payload, fh, indent=2)
+
+    print(f"\n✓ Metrics saved to {metrics_path}")
+    g = results["global"]
+    print(f"  Aggregate : {g['aggregate']:.4f}")
+    print(f"  Accuracy  : {g['accuracy']:.4f}")
+    print(f"  F1 macro  : {g['f1_macro']:.4f}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
