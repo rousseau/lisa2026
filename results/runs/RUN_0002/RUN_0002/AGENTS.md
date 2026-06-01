@@ -3,16 +3,10 @@
 ## Run metadata
 
 - **Run ID**: RUN_0002
-- **Date**: 2026-05-29 (exécution), 2026-06-01 (analyse)
+- **Date**: 2026-05-29
 - **Tasks covered**: 1b (artifact removal / image enhancement)
 - **Parent run**: None (first Task 1b baseline)
 - **Change scope**: New task — architectural baseline
-
-## Training status
-
-✅ **Terminé** sur Jean Zay (4x H100 80 Go, 100 epochs, 14 min)
-
-Results retrieved from Jean Zay: 2026-06-01
 
 ---
 
@@ -97,14 +91,9 @@ See `implementation_plan.md`.
 
 | Metric | Value |
 |--------|-------|
-| Training time | 14 min (Jean Zay, 100 epochs) |
-| Best val_cycle | 2.0578 @ epoch 94 |
-| Final val_cycle | 2.0593 |
-| D loss | ~0.0015 (stable, no collapse) |
-| PSNR (proxy) | 2.17 dB (val set) |
-| SSIM (proxy) | -0.002 (val set) |
-| FID | — (pending test set) |
-| LPIPS | — (pending test set) |
+| FID | — (pending) |
+| PSNR | — (pending) |
+| LPIPS | — (pending) |
 
 ---
 
@@ -120,5 +109,4 @@ is unstable.
 
 ## Decision
 
-✅ **Promoted** — Stable training, clean convergence, checkpoint saved.
-Results ready for challenge submission (test set required for FID/PSNR/LPIPS).
+⏳ Pending — training not yet executed.

@@ -1,0 +1,39 @@
+# RUN_0002 — CycleGAN Task 1b (unpaired artifact removal)
+# Baseline: 3D CycleGAN, domain A (Noise/Motion artefacted) → domain B (clean)
+
+run:
+  id: "0002"
+  task: "1b"
+  description: "3D CycleGAN unpaired artifact removal — noise and motion"
+
+data:
+  data_root: /home/rousseau/Data/LISA2026
+  csv_path: /home/rousseau/Data/LISA2026/LISA_Task1a_2026.csv
+  # Task 1a index-based split — same subjects as RUN_0001
+  split_pkl: results/splits/task1a_fixed.pkl
+  image_suffix: "_ciso.nii.gz"
+  spatial_size: [96, 96, 96]
+  # Domain A: volumes with Noise >= 1 OR Motion >= 1
+  noise_threshold: 1
+  motion_threshold: 1
+
+model:
+  # Generator: U-Net with residual bottleneck
+  base_filters: 32          # feature maps after first conv (enc: 32/64/128/256)
+  n_res_blocks: 6           # residual blocks in bottleneck
+  # Discriminator: PatchGAN
+  disc_base_filters: 64
+  disc_n_layers: 4
+
+training:
+  num_epochs: 100
+  decay_epoch: 50           # LR constant for first 50, then linear decay to 0
+  batch_size: 1
+  num_workers: 4
+  learning_rate: 2.0e-4
+  lambda_cycle: 10.0        # cycle-consistency weight
+  lambda_identity: 5.0      # identity loss weight
+
+output:
+  checkpoint_dir: outputs/checkpoints/RUN_0002
+  results_dir: results/runs/RUN_0002
