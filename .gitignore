@@ -40,3 +40,6 @@ doc/
 # results/ est intentionnellement tracké (documentation scientifique légère)
 # Seules les prédictions lourdes sont exclues :
 results/**/*.csv
+
+# Identifiants de synchronisation Jean Zay (jamais versionné)
+.sync_env
