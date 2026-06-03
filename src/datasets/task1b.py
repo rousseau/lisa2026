@@ -37,6 +37,7 @@ from monai.transforms import (
     RandAdjustContrastd,
     RandFlipd,
     RandShiftIntensityd,
+    ScaleIntensityd,
     SpatialPadd,
 )
 from torch.utils.data import Dataset
@@ -76,6 +77,8 @@ def _build_transforms(spatial_size: Tuple[int, ...], stage: str) -> Compose:
         LoadImaged(keys=keys, reader="nibabelreader"),
         EnsureChannelFirstd(keys=keys),
         NormalizeIntensityd(keys=keys, nonzero=False, channel_wise=True),
+        # Scale to [-1, 1] to match Generator Tanh output range
+        ScaleIntensityd(keys=keys, minv=-1.0, maxv=1.0),
         CenterSpatialCropd(keys=keys, roi_size=spatial_size),
         SpatialPadd(keys=keys, spatial_size=spatial_size, mode="symmetric"),
         EnsureTyped(keys=keys),

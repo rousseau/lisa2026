@@ -1,6 +1,6 @@
 {
-  "psnr_input_vs_generated": 2.173917293548584,
-  "ssim_input_vs_generated": -0.00179399480111897,
+  "psnr_input_vs_generated": 27.510272979736328,
+  "ssim_input_vs_generated": 0.9577121734619141,
   "n_val_samples": 5,
   "note": "No paired GT available. PSNR/SSIM are between input (domain A) and G_AB output. Official FID/PSNR/LPIPS require challenge test set."
 }

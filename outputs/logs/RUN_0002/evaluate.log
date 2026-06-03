@@ -1,0 +1,30 @@
+/home/rousseau/miniforge3/lib/python3.13/site-packages/requests/__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+/home/rousseau/miniforge3/lib/python3.13/site-packages/requests/__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+/home/rousseau/miniforge3/lib/python3.13/site-packages/requests/__init__.py:113: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.4) doesn't match a supported version!
+  warnings.warn(
+
+Eval:   0%|          | 0/5 [00:00<?, ?it/s]
+Eval:  20%|██        | 1/5 [00:01<00:04,  1.12s/it]
+Eval:  40%|████      | 2/5 [00:01<00:02,  1.34it/s]
+Eval:  60%|██████    | 3/5 [00:02<00:01,  1.59it/s]
+Eval:  80%|████████  | 4/5 [00:02<00:00,  1.74it/s]
+Eval: 100%|██████████| 5/5 [00:03<00:00,  1.80it/s]
+Eval: 100%|██████████| 5/5 [00:03<00:00,  1.59it/s]
+Loaded G_AB from outputs/checkpoints/RUN_0002/G_AB_best.pt
+
+Metrics saved to results/runs/RUN_0002/metrics.json
+  psnr_input_vs_generated: 9.6159
+  ssim_input_vs_generated: -0.0503
+  n_val_samples: 5
+  note: No paired GT available. PSNR/SSIM are between input (domain A) and G_AB output. Official FID/PSNR/LPIPS require challenge test set.
+
+[LISA 2026] Evaluation
+  Run    : 0002
+  Task   : 1b
+  Module : src.evaluate_task1b
+  Config : configs/run_0002_cyclegan_task1b.yaml
+  $ /home/rousseau/miniforge3/envs/lisa2026/bin/python -m src.evaluate_task1b --config configs/run_0002_cyclegan_task1b.yaml
+
+[OK] Evaluation completed.

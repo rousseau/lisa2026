@@ -1,0 +1,19 @@
+
+[LISA 2026] Training
+  Run    : 0002
+  Task   : 1b
+  Module : src.train_task1b
+  Config : configs/run_0002_cyclegan_task1b.yaml
+
+============================================================
+  Module : src.train_task1b
+  Config : configs/run_0002_cyclegan_task1b.yaml
+============================================================
+
+  $ /home/rousseau/miniforge3/envs/lisa2026/bin/python -m src.train_task1b --config configs/run_0002_cyclegan_task1b.yaml
+CycleGAN RUN_0002 | device=cuda | n_gpus=1 | train=27 val=8 | G params=49,500,482 | D params=22,093,954
+
+============================================================
+Starting CycleGAN training — 100 epochs
+============================================================
+Train:   0%|          | 0/27 [00:00<?, ?it/s]Train:   4%|▎         | 1/27 [00:14<06:15, 14.43s/it]Train:   7%|▋         | 2/27 [00:28<05:51, 14.07s/it]Train:  11%|█         | 3/27 [00:42<05:34, 13.94s/it]Train:  15%|█▍        | 4/27 [00:55<05:20, 13.95s/it]Train:  19%|█▊        | 5/27 [01:09<05:06, 13.91s/it]Train:  22%|██▏       | 6/27 [01:23<04:52, 13.94s/it]Train:  26%|██▌       | 7/27 [01:37<04:38, 13.92s/it]Train:  30%|██▉       | 8/27 [01:51<04:24, 13.93s/it]Train:  33%|███▎      | 9/27 [02:05<04:11, 13.95s/it]Train:  37%|███▋      | 10/27 [02:19<03:57, 13.97s/it]Train:  41%|████      | 11/27 [02:33<03:40, 13.81s/it]Train:  44%|████▍     | 12/27 [02:46<03:24, 13.65s/it]

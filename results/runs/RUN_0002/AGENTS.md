@@ -93,32 +93,45 @@ See `implementation_plan.md`.
 
 ---
 
-## Results summary
+## Results summary v2 (corrected normalization)
 
-| Metric | Value |
-|--------|-------|
-| Training time | 14 min (Jean Zay, 100 epochs) |
-| Best val_cycle | 2.0578 @ epoch 94 |
-| Final val_cycle | 2.0593 |
-| D loss | ~0.0015 (stable, no collapse) |
-| PSNR (proxy) | 2.17 dB (val set) |
-| SSIM (proxy) | -0.002 (val set) |
-| FID | — (pending test set) |
-| LPIPS | — (pending test set) |
+| Metric | Value v2 (corrected) | Value v1 (buggy) | Status |
+|--------|----------------------|------------------|--------|
+| Training time | ~7h (local GB10, 100 epochs) | 14 min (Jean Zay) | — |
+| Best val_cycle | 0.1594 @ epoch 94 | 2.0578 | ✅ Improved 13× |
+| Final val_cycle | 0.1677 | 2.0593 | ✅ Improved 12× |
+| D loss | ~0.36 (active) | ~0.0015 (inert) | ✅ Discriminator active |
+| PSNR (proxy) | **27.51 dB** | 2.17 dB | ✅ anatomically coherent |
+| SSIM (proxy) | **0.958** | -0.002 | ✅ highly correlated |
+| FID | — (pending test set) | — | — |
+| LPIPS | — (pending test set) | — | — |
+
+**Bug fix (2026-06-02)**:
+- **Normalization mismatch**: Dataset outputs z-score normalized values, but Generator uses Tanh (range [-1,1]).
+- **Fix applied**: `ScaleIntensityd(minv=-1.0, maxv=1.0)` added in `src/datasets/task1b.py`.
+- **Fix applied**: Visualization script now correctly selects subjects by category (Clean/Noise/Motion).
+- **v2 retrained locally** (100 epochs, ~7h GB10) with corrected normalization.
+
+**Visual proofs generated**:
+- `results/runs/RUN_0002/plots/visuals/visual_proofs_{clean,motion,noise}_{axial,coronal,sagittal}.png`
 
 ---
 
 ## Comparability statement
 
 This run is the first Task 1b baseline. No prior run to compare with.
-RUN_0004 includes a reconstruction head (L1+SSIM autoencoder) but it is
-not directly comparable: different architecture, different objective
-(denoising vs. unpaired translation), and RUN_0004 multi-task training
-is unstable.
+RUN_0002 v1 ( Jean Zay, 2026-05-29) was **rejected** due to a normalization mismatch
+(z-score input vs Tanh output), causing anatomical erasure. The bug was fixed in
+`src/datasets/task1b.py` (added `ScaleIntensityd [-1, 1]`), and v2 was retrained
+locally (100 epochs, ~7h GB10, 2026-06-03). RUN_0004 includes a reconstruction head
+(L1+SSIM autoencoder) but it is not directly comparable: different architecture,
+different objective (denoising vs. unpaired translation).
 
 ---
 
 ## Decision
 
-✅ **Promoted** — Stable training, clean convergence, checkpoint saved.
-Results ready for challenge submission (test set required for FID/PSNR/LPIPS).
+✅ **Promoted** — RUN_0002 v2 validated. CycleGAN 3D produces anatomically coherent
+outputs with PSNR=27.5 dB / SSIM=0.958 on the validation set. Visualization
+confirms artifact removal for motion artefacts and preservation of anatomy for
+clean images. Ready for challenge test set submission.

@@ -41,7 +41,7 @@ Gap to 1st place: ~−0.11 aggregate. Main gap drivers: no artifact simulation, 
 
 | Run ID | Date | Parent | Model | Method | FID | PSNR | LPIPS | Decision |
 |--------|------|--------|-------|--------|-----|------|-------|---------|
-| [RUN_0002](runs/RUN_0002/AGENTS.md) | 2026-05-29 (Jean Zay) | — | 3D CycleGAN (G: U-Net [32..256] + 6 ResBlocks; D: PatchGAN) | Unpaired (LSGAN + cycle L1 + identity L1) | — | 2.17 dB (proxy) | — | ✅ Promoted |
+| [RUN_0002](runs/RUN_0002/AGENTS.md) | 2026-06-03 (v2 local, corrected) | — | 3D CycleGAN (G: U-Net [32..256] + 6 ResBlocks; D: PatchGAN) | Unpaired (LSGAN + cycle L1 + identity L1) | — | **27.51 dB** (proxy) | — | ✅ Promoted |
 
 > **Note**: No paired ground truth available. Domains A (Noise≥1 or Motion≥1) and B (Noise=0 and
 > Motion=0) derived from Task 1a CSV. Official metrics (FID/PSNR/LPIPS) require challenge test set.

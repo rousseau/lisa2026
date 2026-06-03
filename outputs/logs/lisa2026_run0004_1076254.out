@@ -1,0 +1,148 @@
+=======================================================================
+  LISA 2026 — RUN_0004 Multi-task
+  Job         : 1076254
+  Nœud        : jzxh011
+  Projet      : /lustre/fswork/projects/rech/crp/ulq73oz/LISA/lisa2026
+  Données     : /lustre/fswork/projects/rech/crp/ulq73oz/LISA/data
+  Smoke test  : non
+  Début       : Wed May 20 13:29:17 CEST 2026
+=======================================================================
+  Python  : Python 3.12.7
+  PyTorch : 2.5.0
+  MONAI   : 1.3.2
+  GPU     : NVIDIA H100 80GB HBM3, 81559 MiB
+  Volumes _ciso.nii.gz : 69
+
+════════════════════════════════════════
+ Phase 1/2 — Entraînement
+════════════════════════════════════════
+
+[LISA 2026] Training
+  Run    : 0004
+  Task   : 1a+1b+2
+  Module : src.train_multitask
+  Config : configs/run_0004_multitask.yaml
+
+============================================================
+  Module : src.train_multitask
+  Config : configs/run_0004_multitask.yaml
+============================================================
+
+  $ /lustre/fshomisc/sup/pub/anaconda-py3/h100/2024.06/envs/pytorch-gpu-2.5.0+py3.12.7/bin/python3 -m src.train_multitask --config configs/run_0004_multitask.yaml
+Task 1a : train=436, val=96
+Task 1b : train=25, val=10
+Task 2  : train=48,  val=12
+[INFO] Partial encoder warm-start from outputs/checkpoints/RUN_0003/task2_dynunet_best.pt: 46/84 keys matched.
+Device : cuda | AMP : True
+Warm-up: 50 epochs (early exit if DSC≥0.10) | Head warm-up: 5 epochs | Joint: 80 epochs @ lr=1.0e-05 | λ=(1a=1.0, 1b=1.0, 2=1.0) [loss-normalized, grad_clip=1.0]
+
+============================================================
+Warm-up phase (50 epochs) — Task 2 only
+============================================================
+[Warmup] Epoch 001/050 | train_loss=0.6391 | val_dice_2=0.1649 | val_loss_1a=7.6904 | val_loss_1b=1.2331
+  -> New best checkpoint saved (warmup, val_dice_2=0.1649)
+  -> Warmup early exit at epoch 1: val_dice_2=0.1649 >= target 0.10
+
+============================================================
+Head warm-up phase (5 epochs) — têtes 1a + 1b, encodeur gelé
+============================================================
+[HeadWarmup] Epoch 001/005 | loss_1a=5.1084 | loss_1b=1.4567 | nan_steps=0
+[HeadWarmup] Epoch 002/005 | loss_1a=4.6954 | loss_1b=1.1729 | nan_steps=133
+[HeadWarmup] Epoch 003/005 | loss_1a=0.0000 | loss_1b=0.0000 | nan_steps=436
+[HeadWarmup] Epoch 004/005 | loss_1a=0.0000 | loss_1b=0.0000 | nan_steps=436
+[HeadWarmup] Epoch 005/005 | loss_1a=0.0000 | loss_1b=0.0000 | nan_steps=436
+[Calibration] Initial losses — 1a=nan  1b=nan  2=0.3899
+[Calibration] Effective weights after normalisation — λ_1a/L0=nan  λ_1b/L0=nan  λ_2/L0=2.5647
+[Joint setup] Resetting LR to 1.00e-05 (warmup LR was 1.00e-04).
+
+============================================================
+Joint phase (80 epochs) — all 3 tasks
+============================================================
+  [WARNING] 436/436 steps had NaN/Inf loss and were skipped (grad clip=1.0).
+[Joint] Epoch 001/080 (global 056) | total=0.0000 | 1a=0.0000 | 1b=0.0000 | 2=0.0000 | val_dice_2=0.1649
+  [WARNING] 436/436 steps had NaN/Inf loss and were skipped (grad clip=1.0).
+[Joint] Epoch 002/080 (global 057) | total=0.0000 | 1a=0.0000 | 1b=0.0000 | 2=0.0000 | val_dice_2=0.1649
+  [WARNING] 436/436 steps had NaN/Inf loss and were skipped (grad clip=1.0).
+[Joint] Epoch 003/080 (global 058) | total=0.0000 | 1a=0.0000 | 1b=0.0000 | 2=0.0000 | val_dice_2=0.1649
+  [WARNING] 436/436 steps had NaN/Inf loss and were skipped (grad clip=1.0).
+[Joint] Epoch 004/080 (global 059) | total=0.0000 | 1a=0.0000 | 1b=0.0000 | 2=0.0000 | val_dice_2=0.1649
+  [WARNING] 436/436 steps had NaN/Inf loss and were skipped (grad clip=1.0).
+[Joint] Epoch 005/080 (global 060) | total=0.0000 | 1a=0.0000 | 1b=0.0000 | 2=0.0000 | val_dice_2=0.1649
+  [WARNING] 436/436 steps had NaN/Inf loss and were skipped (grad clip=1.0).
+[Joint] Epoch 006/080 (global 061) | total=0.0000 | 1a=0.0000 | 1b=0.0000 | 2=0.0000 | val_dice_2=0.1649
+  [WARNING] 436/436 steps had NaN/Inf loss and were skipped (grad clip=1.0).
+[Joint] Epoch 007/080 (global 062) | total=0.0000 | 1a=0.0000 | 1b=0.0000 | 2=0.0000 | val_dice_2=0.1649
+  [WARNING] 436/436 steps had NaN/Inf loss and were skipped (grad clip=1.0).
+[Joint] Epoch 008/080 (global 063) | total=0.0000 | 1a=0.0000 | 1b=0.0000 | 2=0.0000 | val_dice_2=0.1649
+  [WARNING] 436/436 steps had NaN/Inf loss and were skipped (grad clip=1.0).
+[Joint] Epoch 009/080 (global 064) | total=0.0000 | 1a=0.0000 | 1b=0.0000 | 2=0.0000 | val_dice_2=0.1649
+  [WARNING] 436/436 steps had NaN/Inf loss and were skipped (grad clip=1.0).
+[Joint] Epoch 010/080 (global 065) | total=0.0000 | 1a=0.0000 | 1b=0.0000 | 2=0.0000 | val_dice_2=0.1649
+  [WARNING] 436/436 steps had NaN/Inf loss and were skipped (grad clip=1.0).
+[Joint] Epoch 011/080 (global 066) | total=0.0000 | 1a=0.0000 | 1b=0.0000 | 2=0.0000 | val_dice_2=0.1649
+  [WARNING] 436/436 steps had NaN/Inf loss and were skipped (grad clip=1.0).
+[Joint] Epoch 012/080 (global 067) | total=0.0000 | 1a=0.0000 | 1b=0.0000 | 2=0.0000 | val_dice_2=0.1649
+  [WARNING] 436/436 steps had NaN/Inf loss and were skipped (grad clip=1.0).
+[Joint] Epoch 013/080 (global 068) | total=0.0000 | 1a=0.0000 | 1b=0.0000 | 2=0.0000 | val_dice_2=0.1649
+  [WARNING] 436/436 steps had NaN/Inf loss and were skipped (grad clip=1.0).
+[Joint] Epoch 014/080 (global 069) | total=0.0000 | 1a=0.0000 | 1b=0.0000 | 2=0.0000 | val_dice_2=0.1649
+  [WARNING] 436/436 steps had NaN/Inf loss and were skipped (grad clip=1.0).
+[Joint] Epoch 015/080 (global 070) | total=0.0000 | 1a=0.0000 | 1b=0.0000 | 2=0.0000 | val_dice_2=0.1649
+  -> Early stopping triggered at epoch 70 (patience=15)
+
+Training complete. Best val Dice (Task 2): 0.1649
+Checkpoint : outputs/checkpoints/RUN_0004/multitask_best.pt
+History    : results/runs/RUN_0004/training_history.json
+
+[OK] Training completed.
+  Durée entraînement : 18 min
+
+════════════════════════════════════════
+ Phase 2/2 — Évaluation (3 tâches)
+════════════════════════════════════════
+
+[LISA 2026] Evaluation
+  Run    : 0004
+  Task   : 1a+1b+2
+  Module : src.evaluate_multitask
+  Config : configs/run_0004_multitask.yaml
+
+[1/1] Running multi-task evaluation (Tasks 1a, 1b, 2)
+  $ /lustre/fshomisc/sup/pub/anaconda-py3/h100/2024.06/envs/pytorch-gpu-2.5.0+py3.12.7/bin/python3 -m src.evaluate_multitask --config configs/run_0004_multitask.yaml
+[INFO] Loaded checkpoint from outputs/checkpoints/RUN_0004/multitask_best.pt (epoch 1, val_dice_2=0.1649)
+Val sizes — 1a: 96, 1b: 10, 2: 12
+
+── Task 1a — Artifact classification ──
+
+── Task 1b — Image reconstruction ──
+
+── Task 2 — Multi-structure segmentation ──
+
+[INFO] Metrics saved to results/runs/RUN_0004/metrics.json
+
+── Summary ──────────────────────────────────────────────────────────
+  Task 1a — aggregate       : 0.1944
+  Task 1a — accuracy (global): 0.2693
+  Task 1b — PSNR            : 3.38 dB
+  Task 1b — L1              : 1.2331
+  Task 1b — n_subjects      : 10
+  Task 2  — mean DSC        : 0.1649
+  Task 2  — mean HD95       : 26.70
+  Task 2  — mean ASSD       : 11.12
+  Task 2  — n_subjects      : 12
+
+[OK] Evaluation complete.
+  Durée évaluation : 0 min
+
+=======================================================================
+  RUN_0004 TERMINÉ
+  Fin        : Wed May 20 13:49:57 CEST 2026
+  Durée tot. : 19 min
+  Métriques  : results/runs/RUN_0004/metrics.json
+  Checkpoint : outputs/checkpoints/RUN_0004/multitask_best.pt
+=======================================================================
+
+── Résumé métriques ──────────────────────────────────────────────────
+  Task 1a — aggregate : 0.1944
+  Task 1b — PSNR      : 3.38 dB
+  Task 2  — mean DSC  : 0.1649

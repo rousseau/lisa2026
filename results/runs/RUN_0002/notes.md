@@ -1,57 +1,59 @@
-# RUN_0002 — Notes
+# RUN_0002 — Notes (v2 corrected)
 
 ## Status
 
-✅ **Terminé** sur Jean Zay (4x H100 80 Go)
+✅ **Terminé** — v2 retrained locally with corrected normalization.
 
-## Training configuration (exécuté sur Jean Zay)
+## Training configuration (v2 local)
 
 | Parameter | Value |
 |-----------|-------|
-| GPU | 4× H100 80 Go |
+| GPU | NVIDIA GB10 (local) |
 | Epochs | 100 |
-| Training time | 14 minutes |
-| Batch size | 1 (DataParallel sur 4 GPUs) |
+| Training time | ~7 hours |
+| Batch size | 1 |
 | Spatial size | 96³ |
 | lr | 2e-4 |
 
-## Results
+## Results v2 (corrected normalization)
 
-- **Best validation cycle loss**: 2.0578 @ epoch 94
-- **Final validation cycle loss**: 2.0593
-- **Discriminator loss stable**: D ≈ 0.0015 (pas de collapse)
-- **Epoch 50**: LR decay débuté (lineaire jusqu'epoch 100)
+| Metric | v2 (corrected) | v1 (buggy, Jean Zay) |
+|--------|-----------------|----------------------|
+| Best val_cycle | **0.1594** @ epoch 94 | 2.0578 |
+| Final val_cycle | **0.1677** | 2.0593 |
+| D loss | **~0.36** (active) | ~0.0015 (inert) |
+| PSNR proxy | **27.51 dB** | 2.17 dB ❌ |
+| SSIM proxy | **0.958** | -0.002 ❌ |
 
-## Domain statistics (exécuté)
+## Bug fix
 
-- Domain A (artefacted, Noise≥1 OR Motion≥1): 27 sujets
-- Domain B (clean, Noise=0 AND Motion=0): 27 sujets
-- Validation: 5 sujets domaine A
+**Critical bug (2026-06-02)**: `NormalizeIntensityd` output z-score, but Generator uses `Tanh` → range mismatch caused anatomical erasure.
 
-## Potentiels problèmes identifiés
+**Fix**: Added `ScaleIntensityd(minv=-1.0, maxv=1.0)` in `src/datasets/task1b.py`. Retrained v2 locally.
 
-1. **SSIM négatif** (−0.0018) : Indique des différences importantes entre
-   input (domaine A) et output G_AB. Attendu sans GT appariée — proxy
-   métrique limité.
+## Visual proofs
 
-2. **FID/PSNR/LPIPS non calculables localement**: Réquiert le jeu de test
-   du challenge (non disponible localement).
+All categories generated:
+- `results/runs/RUN_0002/plots/visuals/visual_proofs_clean_*.png`
+- `results/runs/RUN_0002/plots/visuals/visual_proofs_motion_*.png`
+- `results/runs/RUN_0002/plots/visuals/visual_proofs_noise_*.png`
 
 ## Outputs
 
 - Checkpoints: `outputs/checkpoints/RUN_0002/` (G_AB_best.pt, cyclegan_full_best.pt)
 - Metrics: `results/runs/RUN_0002/metrics.json`
 - Plots: `results/runs/RUN_0002/plots/`
-  - training_curves.png
-  - metrics_summary.png
-  - evolution_30epochs.png
+- Visual proofs: `results/runs/RUN_0002/plots/visuals/`
 
 ## Commands
 
 ```bash
-# Training (Jean Zay)
-sbatch src/slurm/sync_from_jeanzay.sh pull_run --run 0002
+# Training (local, corrected)
+python train.py --run 0002
 
-# Evaluation locale
+# Evaluation
 python evaluate.py --run 0002
+
+# Visualisation
+python src/analysis/visualize_run0002.py
 ```
