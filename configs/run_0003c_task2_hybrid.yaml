@@ -1,0 +1,64 @@
+# RUN_0003c — Hybrid Feature Fusion nnU-Net + MedSAM2 (Task 2)
+
+run_id: "0003c"
+run_name: "task2_hybrid_nnunet_medsam2"
+task: "2"
+date: "2026-06-05"
+description: >
+  Feature fusion of nnU-Net/DynUNet local encoder with MedSAM2 global encoder.
+  2-phase training: Phase 1 fuses features (fusion+decoder only),
+  Phase 2 fine-tunes full model except MedSAM2 encoder.
+
+data:
+  data_root: "/home/rousseau/Data/LISA2026"
+  split_pkl: "results/splits/task2_fixed.pkl"
+  image_suffix: "_ciso.nii.gz"
+  label_suffix: "_LF_seg.nii.gz"
+  patch_size: [128, 128, 128]
+  val_roi_size: [128, 128, 128]
+  train_num_samples: 2
+
+model:
+  type: "hybrid"
+  in_channels: 1
+  out_channels: 12
+  nnunet_checkpoint: "outputs/checkpoints/RUN_0003a/nnUNetTrainer__nnUNetPlans__3d_fullres/fold_0/checkpoint_best.pth"
+  medsam2_checkpoint: "external/MedSAM2/checkpoints/MedSAM2_latest.pt"
+  filters: [32, 64, 128, 256, 320]
+  deep_supervision: false
+
+training:
+  batch_size: 1
+  num_workers: 4
+  num_epochs: 100
+  phase1_epochs: 20
+  phase1_lr: 1.0e-3
+  phase2_lr: 5.0e-4
+  min_learning_rate: 1.0e-6
+  weight_decay: 1.0e-5
+  loss:
+    type: "dice_ce"
+    lambda_dice: 1.0
+    lambda_ce: 1.0
+
+early_stopping:
+  patience: 25
+
+inference:
+  sw_batch_size: 1
+  overlap: 0.5
+  tta_flip_axes:
+    - [2]
+    - [3]
+    - [4]
+  keep_largest_component: true
+
+environment:
+  seed: 42
+  deterministic: true
+  mixed_precision: true
+
+output:
+  checkpoint_dir: "outputs/checkpoints/RUN_0003c"
+  log_dir: "outputs/logs/RUN_0003c"
+  results_dir: "results/runs/RUN_0003c"

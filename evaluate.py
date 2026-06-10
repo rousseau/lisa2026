@@ -8,8 +8,6 @@ Usage
     python evaluate.py --list-runs
 """
 
-import sys
-
 from src.cli.registry import discover_runs
 from src.cli.common import build_parser, resolve_run, dispatch_single, dispatch_per_task
 

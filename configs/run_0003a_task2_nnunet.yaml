@@ -1,0 +1,47 @@
+# RUN_0003a — nnU-Net v2 Task 2 Segmentation
+
+run_id: "0003a"
+run_name: "task2_nnunetv2"
+task: "2"
+date: "2026-06-05"
+description: >
+  nnU-Net v2 official with auto-configuration for LISA 2026 Task 2.
+  Custom split from task2_fixed.pkl for comparability with RUN_0003.
+
+data:
+  data_root: "/home/rousseau/Data/LISA2026"
+  split_pkl: "results/splits/task2_fixed.pkl"
+  image_suffix: "_ciso.nii.gz"
+  label_suffix: "_LF_seg.nii.gz"
+  nnunet_dataset_id: 501
+  nnunet_dataset_name: "LISA2026_Task2"
+  # Patch size and batch size are auto-configured by nnU-Net
+
+model:
+  type: "nnunetv2"
+  configuration: "3d_fullres"
+  trainer: "nnUNetTrainer"
+  plans: "nnUNetPlans"
+  fold: 0
+
+# nnU-Net paths (set via environment variables on Jean Zay)
+# nnUNet_raw, nnUNet_preprocessed, nnUNet_results
+
+inference:
+  sw_batch_size: 1
+  overlap: 0.5
+  tta_flip_axes: []
+  keep_largest_component: true
+
+early_stopping:
+  patience: 25
+
+environment:
+  seed: 42
+  deterministic: true
+  mixed_precision: true
+
+output:
+  checkpoint_dir: "outputs/checkpoints/RUN_0003a"
+  log_dir: "outputs/logs/RUN_0003a"
+  results_dir: "results/runs/RUN_0003a"

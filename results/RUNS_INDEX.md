@@ -65,6 +65,23 @@ Gap to 1st place: ~−0.11 aggregate. Main gap drivers: no artifact simulation, 
 
 ---
 
+## Task 2 — Multi-structure Segmentation (nnU-Net + Foundation Models)
+
+| Run ID | Date | Parent | Model | Loss | DSC | HD95 | ASSD | Decision |
+|--------|------|--------|-------|------|-----|------|------|---------|
+| [RUN_0003a](runs/RUN_0003a/AGENTS.md) | 2026-06-05 | RUN_0003 | nnU-Net v2 (auto-config) | DiceCE (nnU-Net default) | ⏳ | ⏳ | ⏳ | ⏳ Pending |
+| [RUN_0003b](runs/RUN_0003b/AGENTS.md) | 2026-06-05 | RUN_0003 | MedSAM2 Encoder (frozen) + DynUNet Decoder | DiceCE | ⏳ | ⏳ | ⏳ | ⏳ Pending |
+| [RUN_0003c](runs/RUN_0003c/AGENTS.md) | 2026-06-05 | 0003a + 0003b | Hybrid Feature Fusion nnU-Net + MedSAM2 | DiceCE | ⏳ | ⏳ | ⏳ | ⏳ Pending |
+
+> **Note — RUN_0003a/b/c implementation summary:**
+> - **0003a**: nnU-Net v2 official with custom split from task2_fixed.pkl. Auto-configures patch size, batch size, and architecture.
+> - **0003b**: MedSAM2 (Hiera ViT) frozen encoder + trainable DynUNet decoder. 2.5D processing.
+> - **0003c**: Novel hybrid with feature fusion blocks + 2-phase training. Warm-starts from 0003a.
+>
+> **Execution plan**: 0003a and 0003b in parallel on Jean Zay. 0003c sequential after.
+
+---
+
 ## Multi-task (Tasks 1a + 1b + 2 — Shared Encoder)
 
 | Run ID | Date | Parent | Architecture | T1a Aggr | T1b PSNR | T2 DSC | Decision |

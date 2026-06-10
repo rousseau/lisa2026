@@ -2,10 +2,9 @@
 
 import argparse
 import sys
-from typing import Callable
 
 from src.utils import normalise_run_id, run_cmd, smoke_args as _smoke_args_util
-from src.cli.registry import discover_runs, list_runs
+from src.cli.registry import list_runs
 
 
 def _smoke_args(entry: dict, smoke_test: bool) -> list[str]:

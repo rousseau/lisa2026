@@ -13,9 +13,11 @@ Usage
 
 from __future__ import annotations
 
-import glob
+from functools import lru_cache
 import logging
 import sys
+import copy
+import importlib.util
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +46,17 @@ MODULE_MAP: dict[tuple[str, str | None], tuple[str, str]] = {
 
 # Suffixes to skip (Jean Zay overrides — not distinct runs)
 IGNORE_SUFFIXES = ("_jeanzay",)
+
+# Official Task 1a artifact names (used to infer task from legacy configs)
+ARTIFACT_TASK_NAMES = {
+    "Noise",
+    "Zipper",
+    "Positioning",
+    "Banding",
+    "Motion",
+    "Contrast",
+    "Distortion",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -103,9 +116,8 @@ def _extract_task(config: dict[str, Any], filename: str) -> str:
     if "tasks" in config:
         tasks = config["tasks"]
         if isinstance(tasks, list):
-            # If tasks is a list of artifact names (e.g. Noise, Zipper, ...), it's Task 1a
-            artifact_names = {"Noise", "Zipper", "Positioning", "Banding", "Motion", "Contrast", "Distortion"}
-            if all(str(t) in artifact_names for t in tasks):
+            # If tasks is a list of official artifact names, it's Task 1a.
+            if all(str(t) in ARTIFACT_TASK_NAMES for t in tasks):
                 return "1a"
             return "+".join(str(t) for t in tasks)
         return str(tasks)
@@ -143,6 +155,11 @@ def _infer_modules(task: str, model_type: str | None) -> tuple[str, str] | None:
     return result
 
 
+def _module_exists(module_path: str) -> bool:
+    """Return True if an importable module exists for *module_path*."""
+    return importlib.util.find_spec(module_path) is not None
+
+
 def _infer_mode(config: dict[str, Any]) -> str:
     """Determine run mode: 'per_task', 'nnunet', or 'single'."""
     if "tasks" in config and isinstance(config["tasks"], list):
@@ -168,6 +185,7 @@ def _parse_config(path: Path) -> dict[str, Any] | None:
 # ---------------------------------------------------------------------------
 
 
+@lru_cache(maxsize=1)
 def _discover_raw() -> dict[str, dict[str, Any]]:
     """Internal: scan configs and return raw dict[run_id, entry].
 
@@ -219,6 +237,21 @@ def _discover_raw() -> dict[str, dict[str, Any]]:
             continue
         train_module, eval_module = modules
 
+        if not _module_exists(train_module):
+            logger.warning(
+                "Skipping run '%s' — training module '%s' not found.",
+                run_id,
+                train_module,
+            )
+            continue
+        if not _module_exists(eval_module):
+            logger.warning(
+                "Skipping run '%s' — evaluation module '%s' not found.",
+                run_id,
+                eval_module,
+            )
+            continue
+
         entry: dict[str, Any] = {
             "run_id": run_id,
             "task": task,
@@ -242,7 +275,8 @@ def discover_runs() -> dict[str, dict[str, Any]]:
 
     Returns a dict mapping run_id → entry dict.
     """
-    return _discover_raw()
+    # Return a deep copy so callers cannot mutate the cached registry.
+    return copy.deepcopy(_discover_raw())
 
 
 def discover_eval_runs() -> dict[str, dict[str, Any]]:
@@ -251,7 +285,7 @@ def discover_eval_runs() -> dict[str, dict[str, Any]]:
     Kept for backward compatibility — both training and evaluation share
     the same registry because every run carries ``module`` and ``eval_module``.
     """
-    return _discover_raw()
+    return discover_runs()
 
 
 def list_runs() -> None:
