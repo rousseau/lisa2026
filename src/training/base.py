@@ -82,6 +82,9 @@ class BaseTrainer(ABC):
         for d in (self.ckpt_dir, self.log_dir, self.results_dir):
             os.makedirs(d, exist_ok=True)
 
+        # Subclass contract: set num_epochs, ckpt_path in __init__
+        self.num_epochs = 0
+        self.ckpt_path = None
         self.history_path = os.path.join(self.results_dir, "training_history.json")
 
     # ── Abstract interface ───────────────────────────────────────────────────
@@ -106,33 +109,32 @@ class BaseTrainer(ABC):
     def validate(self) -> dict:
         """Run validation; return dict containing ``self.val_metric_key``."""
 
-    @abstractmethod
-    def train(self) -> None:
-        """Full training loop."""
+    # NOTE: train() is concrete below — subclasses may override it or rely on
+    # the generic loop if their epoch/validate interface is sufficient.
 
     # ── Checkpoint helpers ───────────────────────────────────────────────────
 
     def save_checkpoint(self, epoch: int, val_metric: float, path: str) -> None:
-        """Save model + optimizer state dict.
+        """Save model + optimizer + scaler state dict.
 
         Args:
             epoch:      Current epoch index (1-based).
             val_metric: Value of the primary validation metric.
             path:       Full path to write the checkpoint.
         """
-        torch.save(
-            {
-                "epoch": epoch,
-                "model_state_dict": self.model.state_dict(),
-                "optimizer_state_dict": self.optimizer.state_dict(),
-                self.val_metric_key: val_metric,
-                "config": self.config,
-            },
-            path,
-        )
+        state = {
+            "epoch": epoch,
+            "model_state_dict": self.model.state_dict(),
+            "optimizer_state_dict": self.optimizer.state_dict(),
+            self.val_metric_key: val_metric,
+            "config": self.config,
+        }
+        if self.use_amp and hasattr(self, "scaler") and self.scaler is not None:
+            state["scaler_state_dict"] = self.scaler.state_dict()
+        torch.save(state, path)
 
     def load_checkpoint(self, path: str, strict: bool = True) -> dict:
-        """Load a checkpoint and restore model weights.
+        """Load a checkpoint and restore model, optimizer, and scaler weights.
 
         Args:
             path:   Path to the checkpoint file.
@@ -144,6 +146,13 @@ class BaseTrainer(ABC):
         ckpt = torch.load(path, map_location=self.device)
         sd = ckpt.get("model_state_dict", ckpt)
         self.model.load_state_dict(sd, strict=strict)
+
+        if "optimizer_state_dict" in ckpt and hasattr(self, "optimizer") and self.optimizer is not None:
+            self.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+
+        if "scaler_state_dict" in ckpt and self.use_amp and hasattr(self, "scaler") and self.scaler is not None:
+            self.scaler.load_state_dict(ckpt["scaler_state_dict"])
+
         return ckpt
 
     # ── Early stopping helper ────────────────────────────────────────────────

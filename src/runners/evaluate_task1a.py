@@ -59,18 +59,17 @@ def main():
         smoke_test=args.smoke_test,
     )
 
-    payload = {
-        "run_id": config.get("run_id", "0001"),
-        "task": "1a",
-        "mode": "ordinal",
-        **results,
-    }
+    from src.evaluation.metrics_io import build_payload, write_metrics
 
-    out_dir = config["output"]["results_dir"]
-    os.makedirs(out_dir, exist_ok=True)
-    metrics_path = os.path.join(out_dir, "metrics.json")
-    with open(metrics_path, "w") as fh:
-        json.dump(payload, fh, indent=2)
+    payload = build_payload(
+        run_id=config.get("run_id", "0001"),
+        task="task1a",
+        model="ordinal",
+        global_metrics=results["global"],
+        per_class=results["per_task"],
+        extra={"mode": "ordinal"},
+    )
+    metrics_path = write_metrics(payload, config["output"]["results_dir"])
 
     print(f"\n✓ Metrics saved to {metrics_path}")
     g = results["global"]

@@ -79,11 +79,45 @@ Minimum content required in each run AGENTS file:
 
 ## Commands
 
-- train.py --run 0001
-- evaluate.py --run 0001
+All entry points are unified and accept `--run <ID>` (with or without `RUN_` prefix).
 
+```bash
+# Discovery
+python train.py --list-runs
+python evaluate.py --list-runs
 
-## Repository Structure
+# Training
+python train.py --run 0001
+python train.py --run 0004 --smoke-test
+
+# Evaluation
+python evaluate.py --run 0001
+python evaluate.py --run 0003 --smoke-test
+
+# Remote (Jean Zay)
+bash src/slurm/submit.sh --run 0001
+bash src/slurm/sync_from_jeanzay.sh pull_run --run 0001
+bash src/slurm/sync_from_jeanzay.sh pull_all
+bash src/slurm/sync_from_jeanzay.sh status
+
+# Visualisation
+python visualize.py --run RUN_0001
+python visualize.py --run RUN_0003 --qualitative
+python visualize.py --compare RUN_0001 RUN_0003 RUN_0004
+python visualize.py --auto-compare
+```
+
+## Artifacts management and cleanup policy
+
+- `outputs/` contains raw execution artifacts (checkpoints, logs) and is excluded from version control.
+- `results/` contains scientific documentation and **must** remain tracked, except heavy `*.csv` or raw predictions.
+- Periodic cleanup should remove:
+  - Orphan SLURM logs (`lisa2026_*.err`, `lisa2026_*.out`) that do not correspond to a validated run.
+  - Redundant training logs (intermediate or failed runs superseded by a corrected version).
+  - Empty placeholder directories.
+  - `__pycache__` directories to prevent import ghosting after module renames or deletions.
+  Run `find src/ results/ configs/ -type d -name "__pycache__" -exec rm -rf {} +` periodically.
+- Checkpoint retention: keep only the best or final checkpoint used for evaluation. Full-model snapshots (e.g. `cyclegan_full_best.pt`) may be archived externally if redundant with task-specific checkpoints.
 
 ```
 .

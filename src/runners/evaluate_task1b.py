@@ -133,11 +133,16 @@ def main() -> None:
 
     metrics = evaluate(config, smoke_test=args.smoke_test)
 
-    results_dir = config.get("output", {}).get("results_dir", "results/runs/RUN_0002")
-    os.makedirs(results_dir, exist_ok=True)
-    metrics_path = os.path.join(results_dir, "metrics.json")
-    with open(metrics_path, "w") as fh:
-        json.dump(metrics, fh, indent=2)
+    from src.evaluation.metrics_io import build_payload, write_metrics
+
+    payload = build_payload(
+        run_id=config.get("run", {}).get("id", "0002"),
+        task="task1b",
+        model="cyclegan",
+        status="proxy",
+        global_metrics=metrics,
+    )
+    metrics_path = write_metrics(payload, config.get("output", {}).get("results_dir", "results/runs/RUN_0002"))
 
     print(f"\nMetrics saved to {metrics_path}")
     for k, v in metrics.items():

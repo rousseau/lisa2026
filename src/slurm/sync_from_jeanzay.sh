@@ -19,6 +19,7 @@
 #   bash src/slurm/sync_from_jeanzay.sh push_splits
 #   bash src/slurm/sync_from_jeanzay.sh push_data
 #   bash src/slurm/sync_from_jeanzay.sh status
+#   bash src/slurm/sync_from_jeanzay.sh status_run --run 0002
 #
 # Configuration requise :
 #   cp src/slurm/sync_from_jeanzay.sh.env.example .sync_env
@@ -76,7 +77,7 @@ if [[ "$CMD" == "help" ]]; then
     echo ""
     echo "Download (Jean Zay → local) :"
     echo "  pull_run --run <ID>   Checkpoints + logs + résultats d'un run"
-    echo "  pull_all              Tous les runs (0001 0002 0003 0004)"
+    echo "  pull_all              Tous les runs découverts automatiquement"
     echo ""
     echo "Upload (local → Jean Zay) :"
     echo "  push_splits           results/splits/ → Jean Zay"
@@ -84,6 +85,7 @@ if [[ "$CMD" == "help" ]]; then
     echo ""
     echo "Divers :"
     echo "  status                Jobs SLURM en cours (squeue)"
+    echo "  status_run --run <ID> Mettre à jour SYNC_STATUS.md comme 'synced'"
     exit 0
 fi
 
@@ -96,14 +98,14 @@ _close_tunnel() {
 }
 trap _close_tunnel EXIT
 
-PROXY_CMD="ssh -i ~/.ssh/id_mrixfields -o StrictHostKeyChecking=no ${PROXY_USER}@${PROXY_HOST} nc %h %p"
+PROXY_CMD="ssh -o StrictHostKeyChecking=no ${PROXY_USER}@${PROXY_HOST} nc %h %p"
 
-echo "======================================================================="
+echo "==================================================================="
 echo "  LISA 2026 — sync depuis Jean Zay"
 echo "  Jean Zay : ${JEANZAY_USER}@${JEANZAY_HOST}"
 echo "  Proxy    : ${PROXY_USER}@${PROXY_HOST}"
 echo "  Remote   : ${REMOTE_BASE}"
-echo "======================================================================="
+echo "==================================================================="
 echo ""
 echo "Ouverture du tunnel SSH (mots de passe demandés une seule fois) ..."
 echo ""
@@ -128,14 +130,37 @@ _scp_down() {
     local remote="$1"
     local local_dest="$2"
     # shellcheck disable=SC2086
-    scp -rp $SCP_CTRL "${JEANZAY_USER}@${JEANZAY_HOST}:${remote}" "${local_dest}" 2>/dev/null
+    scp -rp $SCP_CTRL "${JEANZAY_USER}@${JEANZAY_HOST}:${remote}" "${local_dest}"
 }
 
 _scp_up() {
     local local_src="$1"
     local remote="$2"
     # shellcheck disable=SC2086
-    scp -rp $SCP_CTRL "${local_src}" "${JEANZAY_USER}@${JEANZAY_HOST}:${remote}" 2>/dev/null
+    scp -rp $SCP_CTRL "${local_src}" "${JEANZAY_USER}@${JEANZAY_HOST}:${remote}"
+}
+
+_discover_remote_runs() {
+    # List RUN_* directories remotely under outputs/checkpoints/
+    # shellcheck disable=SC2086
+    ssh $SSH_CTRL "${JEANZAY_USER}@${JEANZAY_HOST}" \
+        "ls -d ${REMOTE_BASE}/outputs/checkpoints/RUN_* 2>/dev/null | sed 's|.*/RUN_||'" \
+        || true
+}
+
+_update_sync_status() {
+    local ID="$1"
+    local TAG="RUN_${ID}"
+    local STATUS_FILE="${PROJECT_ROOT}/results/SYNC_STATUS.md"
+    local TMP="${STATUS_FILE}.tmp"
+    
+    if [[ ! -f "$STATUS_FILE" ]]; then
+        return  # Status file doesn't exist yet
+    fi
+    
+    # Update the specific row in the markdown table
+    sed "s/| ${TAG}| [^|]* | [^|]* | [^|]* | [^|]* |/| ${TAG}| ✓              | ✓            | ?               | ?          |/" "$STATUS_FILE" > "$TMP" && mv "$TMP" "$STATUS_FILE"
+    echo "  [SYNC] ${TAG} marqué comme 'synced' dans results/SYNC_STATUS.md"
 }
 
 _pull_run_id() {
@@ -149,30 +174,31 @@ _pull_run_id() {
 
     echo -n "   checkpoints/ ... "
     if _scp_down "${REMOTE_BASE}/outputs/checkpoints/${TAG}/" \
-                 "${PROJECT_ROOT}/outputs/checkpoints/${TAG}/"; then
+                 "${PROJECT_ROOT}/outputs/checkpoints/${TAG}/" 2>/dev/null; then
         N=$(find "${PROJECT_ROOT}/outputs/checkpoints/${TAG}" -name "*.pt" | wc -l)
         echo "OK  ($N fichiers .pt)"
     else
-        echo "SKIP (absent ou erreur)"
+        echo "SKIP (absent)"
     fi
 
     echo -n "   logs/         ... "
     if _scp_down "${REMOTE_BASE}/outputs/logs/${TAG}/" \
-                 "${PROJECT_ROOT}/outputs/logs/${TAG}/"; then
+                 "${PROJECT_ROOT}/outputs/logs/${TAG}/" 2>/dev/null; then
         N=$(find "${PROJECT_ROOT}/outputs/logs/${TAG}" -type f | wc -l)
         echo "OK  ($N fichiers)"
     else
-        echo "SKIP (absent ou erreur)"
+        echo "SKIP (absent)"
     fi
 
     echo -n "   results/      ... "
     if _scp_down "${REMOTE_BASE}/results/runs/${TAG}/" \
-                 "${PROJECT_ROOT}/results/runs/${TAG}/"; then
+                 "${PROJECT_ROOT}/results/runs/${TAG}/" 2>/dev/null; then
         echo "OK"
     else
-        echo "SKIP (absent ou erreur)"
+        echo "SKIP (absent)"
     fi
 
+    _update_sync_status "$ID"
     echo ""
 }
 
@@ -185,7 +211,15 @@ case "$CMD" in
     ;;
 
   pull_all)
-    for ID in 0001 0002 0003 0004; do
+    echo "Découverte automatique des runs distants..."
+    REMOTE_RUNS=$(_discover_remote_runs)
+    if [[ -z "$REMOTE_RUNS" ]]; then
+        echo "[WARN] Aucun run distant trouvé."
+        exit 0
+    fi
+    echo "Runs trouvés : $(echo "$REMOTE_RUNS" | tr '\n' ' ')"
+    echo ""
+    for ID in $REMOTE_RUNS; do
         _pull_run_id "$ID"
     done
     ;;
@@ -214,6 +248,11 @@ case "$CMD" in
     ssh $SSH_CTRL "${JEANZAY_USER}@${JEANZAY_HOST}" \
         "squeue -u ${JEANZAY_USER} --format='%.10i %.20j %.8T %.12M %.5D %R' 2>/dev/null \
          || echo '  (aucun job)'"
+    ;;
+
+  status_run)
+    [[ -z "$RUN_ID" ]] && { echo "[ERREUR] --run <ID> obligatoire"; exit 1; }
+    _update_sync_status "$RUN_ID"
     ;;
 
   *)

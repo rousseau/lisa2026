@@ -84,18 +84,27 @@ def main():
         model_fn=model.forward_task2,
     )
 
-    payload = {
-        "run_id": config.get("run_id", "0004"),
-        "task1a": results_1a,
-        "task1b": results_1b,
-        "task2": results_2,
-    }
+    from src.evaluation.metrics_io import build_payload, write_metrics
 
-    results_dir = config["output"]["results_dir"]
-    os.makedirs(results_dir, exist_ok=True)
-    metrics_path = os.path.join(results_dir, "metrics.json")
-    with open(metrics_path, "w") as fh:
-        json.dump(payload, fh, indent=2)
+    payload = build_payload(
+        run_id=config.get("run_id", "0004"),
+        task="multitask",
+        model="dynunet_multihead",
+        global_metrics={
+            "task1a_aggregate": results_1a["global"]["aggregate"],
+            "task1a_accuracy": results_1a["global"]["accuracy"],
+            "task1b_psnr": results_1b.get("psnr", float("nan")),
+            "task1b_lpips": results_1b.get("lpips", float("nan")),
+            "task2_mean_dsc": results_2["global"]["mean_dsc"],
+            "task2_mean_hd95": results_2["global"]["mean_hd95"],
+        },
+        extra={
+            "task1a": results_1a,
+            "task1b": results_1b,
+            "task2": results_2,
+        },
+    )
+    metrics_path = write_metrics(payload, config["output"]["results_dir"])
 
     print(f"\n[INFO] Metrics saved to {metrics_path}")
     print("\n── Summary ──────────────────────────────────────────────────────────")
