@@ -38,7 +38,7 @@ lisa2026/
 |------|-------------|--------|---|
 | **Task 1a** | Classification multi-label d'artefacts (7 classes : Noise, Zipper, Positioning, Banding, Motion, Contrast, Distortion) | **RUN_0001** — DenseNet264 × 7 independent heads, aggregate **0.6887** |
 | **Task 1b** | Amélioration qualité (suppression bruit / mouvement) — à lancer | — (aucun run promu) |
-| **Task 2** | Segmentation multi-structures (12 classes : hippocampes, noyaux caudés, putamens, globus pallidus, thalami, corps calleux, ventricules latéraux, etc.) | **RUN_0003** — DynUNet 12-class [32..320], DSC **0.362**, HD95 15.99 |
+| **Task 2** | Segmentation multi-structures (12 classes : hippocampes, noyaux caudés, putamens, globus pallidus, thalami, corps calleux, ventricules latéraux, etc.) | **RUN_0003** — DynUNet 12-class [32..320], DSC **0.4647**, HD95 12.30 |
 
 ## Environnement
 
@@ -68,7 +68,7 @@ Voir [`results/RUNS_INDEX.md`](results/RUNS_INDEX.md) pour le tableau complet.
 
 | Run ID | Date | Model | DSC | HD95 | Decision |
 |--------|------|-------|-----|------|------|
-| [RUN_0003](results/runs/RUN_0003/AGENTS.md) | 2026-05-14 | DynUNet 12-class | **0.362** | 15.99 | ✅ Promoted |
+| [RUN_0003](results/runs/RUN_0003/AGENTS.md) | 2026-05-14 | DynUNet 12-class | **0.4647** | 12.30 | ✅ Promoted |
 
 ### Multi-task (Tasks 1a + 1b + 2)
 
@@ -160,18 +160,6 @@ python train.py --run 0003
 python evaluate.py --run 0001
 python evaluate.py --run 0003
 ```
-
-## Runs archivés (non maintenus)
-
-Les runs suivants ont été supprimés du catalogue actif lors de la simplification de RUN_0003 :
-
-- ~~RUN_0003_EXP_C~~ — ancienne référence segment (DSC=0.631), checkpoint perdu
-- ~~RUN_0003_EXP_A~~ — training failed
-- ~~RUN_0003_EXP_B~~ — checkpoint skip
-- ~~RUN_0003_EXP_SYM~~ — régression
-- ~~RUN_0003_COLLAPSED~~ — hippocampes fusionnés
-
-RUN_0004 v1 (SharedEncoderMultiTaskModel) a été rejeté et remplacé par v2 (DynUNet backbone).
 
 ## Governance
 

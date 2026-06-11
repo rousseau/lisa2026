@@ -24,6 +24,24 @@ def to_3tuple(values):
     return tuple(int(v) for v in values)
 
 
+def _get_num_segmentation_classes(config: dict) -> int:
+    """Resolve segmentation class count from model config.
+
+    Supports both single-task and multitask config conventions.
+    """
+    model_cfg = config.get("model", {})
+    for key in ("num_seg_classes", "out_channels", "num_classes"):
+        if key in model_cfg:
+            return int(model_cfg[key])
+
+    available = ", ".join(sorted(model_cfg.keys())) if model_cfg else "<none>"
+    raise KeyError(
+        "Missing segmentation class count in config['model']. "
+        "Expected one of: num_seg_classes, out_channels, num_classes. "
+        f"Available keys: {available}"
+    )
+
+
 def evaluate_task2(
     model,
     val_loader,
@@ -41,7 +59,8 @@ def evaluate_task2(
     val_loader : DataLoader
         Validation loader yielding ``{img, label, subject}``.
     config : dict
-        Full config (needs ``data.val_roi_size``, ``inference.*``, ``model.num_seg_classes``).
+        Full config (needs ``data.val_roi_size``, ``inference.*``, and one of
+        ``model.num_seg_classes``, ``model.out_channels`` or ``model.num_classes``).
     device : str
         Torch device.
     smoke_test : bool
@@ -59,8 +78,9 @@ def evaluate_task2(
     overlap = float(config["inference"]["overlap"])
     sw_batch_size = int(config["inference"]["sw_batch_size"])
     tta_axes = config["inference"].get("tta_flip_axes", [])
+    stitch_device = config["inference"].get("stitch_device", "cpu")
     keep_largest = bool(config["inference"].get("keep_largest_component", False))
-    num_classes = int(config["model"]["num_seg_classes"])
+    num_classes = _get_num_segmentation_classes(config)
 
     _predict_fn = model_fn if model_fn is not None else model
 
@@ -68,20 +88,22 @@ def evaluate_task2(
 
     for batch_idx, batch in enumerate(tqdm(val_loader, desc="Eval-Task2")):
         image = batch["img"].to(device)
-        label = batch["label"].to(device).long()
+        label = batch["label"].long()
         subject = batch["subject"][0]
 
-        logits = infer_logits_tta(
-            model_fn=_predict_fn,
-            image=image,
-            roi_size=roi_size,
-            overlap=overlap,
-            sw_batch_size=sw_batch_size,
-            use_amp=use_amp,
-            tta_axes=tta_axes,
-        )
-
-        pred = torch.argmax(logits, dim=1).cpu()
+        with torch.inference_mode():
+            logits = infer_logits_tta(
+                model_fn=_predict_fn,
+                image=image,
+                roi_size=roi_size,
+                overlap=overlap,
+                sw_batch_size=sw_batch_size,
+                use_amp=use_amp,
+                tta_axes=tta_axes,
+                stitch_device=stitch_device,
+            )
+            pred = torch.argmax(logits, dim=1).cpu()
+        del logits
 
         if keep_largest:
             pred_np = pred.squeeze(0).numpy().astype(np.int16)

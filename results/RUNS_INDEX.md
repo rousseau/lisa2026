@@ -2,7 +2,7 @@
 
 Global tracking table for all experimental runs.
 
-Last updated: 2026-06-01 (RUN_0002 analysis completed)
+Last updated: 2026-06-11 (RUN_0003 evaluation refreshed)
 
 ---
 
@@ -54,7 +54,7 @@ Gap to 1st place: ~−0.11 aggregate. Main gap drivers: no artifact simulation, 
 
 | Run ID | Date | Parent | Model | Loss | DSC | HD95 | ASSD | Decision |
 |--------|------|--------|-------|------|-----|------|------|---------|
-| [RUN_0003](runs/RUN_0003/AGENTS.md) | 2026-05-14 | — | DynUNet 12-class [32..320] | DiceCE | **0.362** | 15.99 | 10.51 | ✅ Promoted |
+| [RUN_0003](runs/RUN_0003/AGENTS.md) | 2026-05-14 | — | DynUNet 12-class [32..320] | DiceCE | **0.4647** | 12.30 | 6.66 | ✅ Promoted |
 
 > **Note — informal RUN_0003 experimental sub-cycle:** During development of RUN_0003, several
 > experimental variants (EXP_A through EXP_SYM) were explored informally. EXP_C reportedly achieved

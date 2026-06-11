@@ -1,6 +1,6 @@
 """Task 2 segmentation metrics and inference helpers."""
 
-from typing import Callable, List, Optional, Sequence
+from typing import Callable, List, Optional, Sequence, Union
 
 import numpy as np
 import torch
@@ -76,6 +76,7 @@ def infer_logits_tta(
     sw_batch_size: int,
     use_amp: bool,
     tta_axes: Optional[List] = None,
+    stitch_device: Optional[Union[str, torch.device]] = None,
 ) -> torch.Tensor:
     """Sliding-window inference with optional test-time augmentation (axis flips).
 
@@ -87,11 +88,16 @@ def infer_logits_tta(
         sw_batch_size: Number of windows per forward pass.
         use_amp:       Whether to use automatic mixed precision.
         tta_axes:      List of axis tuples to flip for TTA, e.g. [[2], [3], [4]].
-                       Pass None or [] to disable TTA.
+                   Pass None or [] to disable TTA.
+        stitch_device: Device used for sliding-window output stitching. Set to
+                   ``"cpu"`` to avoid large VRAM allocations for full-volume
+                   logits during evaluation.
 
     Returns:
         Averaged logits tensor [B, num_classes, H, W, D].
     """
+    output_device = image.device if stitch_device is None else torch.device(stitch_device)
+
     if not tta_axes:
         with torch.amp.autocast("cuda", enabled=use_amp):
             return sliding_window_inference(
@@ -100,6 +106,8 @@ def infer_logits_tta(
                 sw_batch_size=sw_batch_size,
                 predictor=model_fn,
                 overlap=overlap,
+                sw_device=image.device,
+                device=output_device,
             )
 
     logits_sum = None
@@ -114,6 +122,8 @@ def infer_logits_tta(
                 sw_batch_size=sw_batch_size,
                 predictor=model_fn,
                 overlap=overlap,
+                sw_device=image.device,
+                device=output_device,
             )
         if axes is not None:
             logits = torch.flip(logits, dims=axes)

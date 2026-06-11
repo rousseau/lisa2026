@@ -119,6 +119,15 @@ if [[ "$RUN_ID" =~ ^(0003|0004)$ ]] && [[ ! -f "results/splits/task2_fixed.pkl" 
         --manifest-output results/splits/task2_manifest.csv
 fi
 
+# ── nnU-Net environment variables (for RUN_0003a) ────────────────────────────
+if [[ "$RUN_ID" = "0003a" ]]; then
+    export nnUNet_raw="${WORK}/nnUNet/raw"
+    export nnUNet_preprocessed="${WORK}/nnUNet/preprocessed"
+    export nnUNet_results="${WORK}/nnUNet/results"
+    mkdir -p "$nnUNet_raw" "$nnUNet_preprocessed" "$nnUNet_results"
+    echo "  nnUNet paths configured."
+fi
+
 # ── Répertoires de sortie ─────────────────────────────────────────────────────
 mkdir -p "outputs/checkpoints/RUN_${RUN_ID}" \
          "outputs/logs/RUN_${RUN_ID}" \
@@ -144,30 +153,63 @@ T0=$(date +%s)
 JZ_CONFIG="configs/run_${RUN_ID}_jeanzay.yaml"
 if [[ -f "$JZ_CONFIG" ]]; then
     echo "  Config Jean Zay : $JZ_CONFIG"
-    # Lire la tâche depuis le YAML pour appeler le bon module
-    TASK=$(python3 -c "import yaml; print(yaml.safe_load(open('$JZ_CONFIG'))['run']['task'])")
-    case "$TASK" in
-        1a)        MODULE="src.train_task1a" ;;
-        1b)        MODULE="src.train_task1b" ;;
-        2)         MODULE="src.train_task2"  ;;
-        multitask) MODULE="src.train_multitask" ;;
-        *)         echo "[ERREUR] Tâche inconnue : $TASK"; exit 1 ;;
+    # Special handling for run IDs that need custom commands
+    case "$RUN_ID" in
+        0003a)
+            echo "  Running nnU-Net v2 pipeline ..."
+            python3 -m src.prepare_nnunet_dataset \
+                --data-root "$DATA_ROOT" \
+                --split-pkl results/splits/task2_fixed.pkl \
+                --output-root nnUNet_raw/Dataset501_LISA
+            echo "  nnUNetv2_plan_and_preprocess ..."
+            nnUNetv2_plan_and_preprocess -d 501 --verify_dataset_integrity -np 8 -nps 8
+            echo "  nnUNetv2_train ..."
+            nnUNetv2_train 501 3d_fullres 0
+            echo "  Evaluation ..."
+            python3 -m src.evaluate_task2_nnunet \
+                --pred-dir "${nnUNet_results}/Dataset501_LISA/nnUNetTrainer__nnUNetPlans__3d_fullres/fold_0/validation" \
+                --gt-dir "nnUNet_raw/Dataset501_LISA/labelsTr" \
+                --config "$JZ_CONFIG"
+            ;;
+        0003b)
+            python3 -m src.train_task2_medsam2 --config "$JZ_CONFIG" $SMOKE_FLAG
+            python3 -m src.evaluate_task2_medsam2 --config "$JZ_CONFIG" $SMOKE_FLAG
+            ;;
+        0003c)
+            python3 -m src.train_task2_hybrid --config "$JZ_CONFIG" $SMOKE_FLAG
+            python3 -m src.evaluate_task2_hybrid --config "$JZ_CONFIG" $SMOKE_FLAG
+            ;;
+        *)
+            # Generic handling for other runs
+            TASK=$(python3 -c "import yaml; print(yaml.safe_load(open('$JZ_CONFIG'))['run']['task'])")
+            case "$TASK" in
+                1a)        MODULE="src.train_task1a" ;;
+                1b)        MODULE="src.train_task1b" ;;
+                2)         MODULE="src.train_task2"  ;;
+                multitask) MODULE="src.train_multitask" ;;
+                *)         echo "[ERREUR] Tache inconnue : $TASK"; exit 1 ;;
+            esac
+            python3 -m "$MODULE" --config "$JZ_CONFIG" $SMOKE_FLAG
+            ;;
     esac
-    python3 -m "$MODULE" --config "$JZ_CONFIG" $SMOKE_FLAG
 else
     python3 train.py --run "$RUN_ID" $SMOKE_FLAG
 fi
 
 echo "  Durée : $(( ($(date +%s) - T0) / 60 )) min"
 
-# ── Évaluation ────────────────────────────────────────────────────────────────
-echo ""
-echo "── Évaluation RUN_${RUN_ID} ────────────────────────────────────────────"
-T1=$(date +%s)
+# Évaluation déjà intégrée dans l'entraînement pour 0003a/0003b/0003c
+if [[ "$RUN_ID" =~ ^0003[abc]$ ]]; then
+    echo ""
+    echo "--> Évaluation déjà effectuée pendant l'entraînement"
+else
+    echo ""
+    echo "── Évaluation RUN_${RUN_ID} ────────────────────────────────────────────"
+    T1=$(date +%s)
 
-JZ_CONFIG="configs/run_${RUN_ID}_jeanzay.yaml"
-if [[ -f "$JZ_CONFIG" ]]; then
-    TASK=$(python3 -c "import yaml; print(yaml.safe_load(open('$JZ_CONFIG'))['run']['task'])")
+    JZ_CONFIG="configs/run_${RUN_ID}_jeanzay.yaml"
+    if [[ -f "$JZ_CONFIG" ]]; then
+        TASK=$(python3 -c "import yaml; print(yaml.safe_load(open('$JZ_CONFIG'))['run']['task'])")
     case "$TASK" in
         1a)        EVAL_MODULE="src.evaluate_task1a" ;;
         1b)        EVAL_MODULE="src.evaluate_task1b" ;;
