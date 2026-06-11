@@ -162,7 +162,7 @@ if [[ -f "$JZ_CONFIG" ]]; then
                 --split-pkl results/splits/task2_fixed.pkl \
                 --output-root nnUNet_raw/Dataset501_LISA
             echo "  nnUNetv2_plan_and_preprocess ..."
-            nnUNetv2_plan_and_preprocess -d 501 --verify_dataset_integrity -np 8 -nps 8
+            nnUNetv2_plan_and_preprocess -d 501 --verify_dataset_integrity -np 8
             echo "  nnUNetv2_train ..."
             nnUNetv2_train 501 3d_fullres 0
             echo "  Evaluation ..."

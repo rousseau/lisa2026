@@ -140,8 +140,6 @@ def main() -> None:
                 "--verify_dataset_integrity",
                 "-np",
                 "8",
-                "-nps",
-                "8",
             ],
             env=env,
         )
