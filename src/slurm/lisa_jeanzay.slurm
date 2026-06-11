@@ -166,18 +166,18 @@ if [[ -f "$JZ_CONFIG" ]]; then
             echo "  nnUNetv2_train ..."
             nnUNetv2_train 501 3d_fullres 0
             echo "  Evaluation ..."
-            python3 -m src.evaluate_task2_nnunet \
+            python3 -m src.runners.evaluate_task2_nnunet \
                 --pred-dir "${nnUNet_results}/Dataset501_LISA/nnUNetTrainer__nnUNetPlans__3d_fullres/fold_0/validation" \
                 --gt-dir "nnUNet_raw/Dataset501_LISA/labelsTr" \
                 --config "$JZ_CONFIG"
             ;;
         0003b)
-            python3 -m src.train_task2_medsam2 --config "$JZ_CONFIG" $SMOKE_FLAG
-            python3 -m src.evaluate_task2_medsam2 --config "$JZ_CONFIG" $SMOKE_FLAG
+            python3 -m src.runners.train_task2_medsam2 --config "$JZ_CONFIG" $SMOKE_FLAG
+            python3 -m src.runners.evaluate_task2_medsam2 --config "$JZ_CONFIG" $SMOKE_FLAG
             ;;
         0003c)
-            python3 -m src.train_task2_hybrid --config "$JZ_CONFIG" $SMOKE_FLAG
-            python3 -m src.evaluate_task2_hybrid --config "$JZ_CONFIG" $SMOKE_FLAG
+            python3 -m src.runners.train_task2_hybrid --config "$JZ_CONFIG" $SMOKE_FLAG
+            python3 -m src.runners.evaluate_task2_hybrid --config "$JZ_CONFIG" $SMOKE_FLAG
             ;;
         *)
             # Generic handling for other runs
