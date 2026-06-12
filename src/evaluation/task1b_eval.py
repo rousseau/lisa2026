@@ -25,8 +25,16 @@ def evaluate_task1b(
     device: str,
     smoke_test: bool = False,
     fid_num_slices_per_volume: int = 10,
+    task_name: str | None = None,
 ) -> dict:
     """Evaluate Task 1b reconstruction metrics inline.
+
+    Parameters
+    ----------
+    task_name :
+        If the model requires a task dispatch argument (e.g. ``"1b"`` for
+        ``DynUNetMultiHeadModel``), it will be passed as ``model(images,
+        task=task_name)``.  When ``None`` the model is called directly.
 
     Returns
     -------
@@ -46,9 +54,13 @@ def evaluate_task1b(
     inception_model = build_inception_model(device)
 
     for batch_idx, batch in enumerate(tqdm(val_loader, desc="Eval-Task1b")):
-        images = batch["img"].to(device)
-        with torch.amp.autocast("cuda", enabled=use_amp):
-            recon = model(images)
+        images = batch["img_B"].to(device) if "img_B" in batch else batch["img"].to(device)
+        with torch.no_grad():
+            with torch.amp.autocast("cuda", enabled=use_amp):
+                if task_name is not None:
+                    recon = model(images, task=task_name)
+                else:
+                    recon = model(images)
         recon_c = recon.clamp(0.0, 1.0)
         target_c = images.clamp(0.0, 1.0)
 

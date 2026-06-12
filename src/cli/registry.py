@@ -40,7 +40,6 @@ MODULE_MAP: dict[tuple[str, str | None], tuple[str, str]] = {
     ("2", None): ("src.runners.train_task2_dynunet", "src.runners.evaluate_task2_dynunet"),
     ("2", "nnunetv2"): ("src.runners.train_task2_nnunet", "src.runners.evaluate_task2_nnunet"),
     ("2", "medsam2"): ("src.runners.train_task2_medsam2", "src.runners.evaluate_task2_medsam2"),
-    ("2", "hybrid"): ("src.runners.train_task2_hybrid", "src.runners.evaluate_task2_hybrid"),
     ("1a+1b+2", None): ("src.runners.train_multitask", "src.runners.evaluate_multitask"),
 }
 

@@ -157,6 +157,7 @@ if [[ -f "$JZ_CONFIG" ]]; then
     case "$RUN_ID" in
         0003a)
             echo "  Running nnU-Net v2 pipeline ..."
+            export PYTHONPATH="${PROJECT_ROOT}/src/shims${PYTHONPATH:+:${PYTHONPATH}}"
             python3 -m src.prepare_nnunet_dataset \
                 --data-root "$DATA_ROOT" \
                 --split-pkl results/splits/task2_fixed.pkl \

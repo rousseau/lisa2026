@@ -53,8 +53,16 @@ def evaluate_task1a_multilabel(
     val_loader: DataLoader,
     device: str,
     smoke_test: bool = False,
+    task_name: str | None = None,
 ) -> dict:
     """Evaluate a multi-label Task 1a model inline.
+
+    Parameters
+    ----------
+    task_name :
+        If the model requires a task dispatch argument (e.g. ``"1a"`` for
+        ``DynUNetMultiHeadModel``), it will be passed as ``model(imgs,
+        task=task_name)``.  When ``None`` the model is called directly.
 
     Returns
     -------
@@ -68,7 +76,10 @@ def evaluate_task1a_multilabel(
         imgs = batch["img"].to(device).float()
         labels = batch["labels"].to(device)  # [B, 7]
         with torch.no_grad():
-            logits = model(imgs)  # [B, 7, 3]
+            if task_name is not None:
+                logits = model(imgs, task=task_name)  # [B, 7, 3]
+            else:
+                logits = model(imgs)  # [B, 7, 3]
         preds = torch.argmax(logits, dim=-1).cpu().numpy()  # [B, 7]
         lbl_np = labels.cpu().numpy()
         for t in range(len(TASK_NAMES)):

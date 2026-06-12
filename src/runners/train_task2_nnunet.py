@@ -39,6 +39,13 @@ def _nnunet_env(config: dict) -> dict:
     if "nnUNet_results" not in env:
         env["nnUNet_results"] = str(PROJECT_ROOT / "nnUNet_results")
 
+    shim_dir = PROJECT_ROOT / "src" / "shims"
+    current_pythonpath = env.get("PYTHONPATH", "")
+    pythonpath_parts = [str(shim_dir)]
+    if current_pythonpath:
+        pythonpath_parts.append(current_pythonpath)
+    env["PYTHONPATH"] = os.pathsep.join(pythonpath_parts)
+
     return env
 
 
@@ -138,8 +145,6 @@ def main() -> None:
                 "-d",
                 str(dataset_id),
                 "--verify_dataset_integrity",
-                "-np",
-                "8",
             ],
             env=env,
         )

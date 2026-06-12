@@ -1,0 +1,82 @@
+# RUN_0005 — Multi-task nnU-Net-like Architecture
+
+run_id: "0005"
+run_name: "multitask_nnunet_like_v1"
+date: "2026-06-12"
+description: >
+  Shared 6-stage 3D U-Net encoder with three task-specific heads.
+  Architecture mimics nnU-Net v2 auto-configuration (filters [32..320,320],
+  6 stages, instance norm affine, conv bias).
+  Improvements over RUN_0004: deeper encoder, aggressive augmentation,
+  33% foreground oversampling, 2 samples/volume, from-scratch training.
+
+# ── Data ───────────────────────────────────────────────────────────────────
+data:
+  data_root: "/home/rousseau/Data/LISA2026"
+  bids_root: "/home/rousseau/Data/LISA2026"
+  csv_path: "/home/rousseau/Data/LISA2026/LISA_Task1a_2026.csv"
+  split_pkl_1a: "results/splits/task1a_fixed.pkl"
+  split_pkl_2: "results/splits/task2_fixed.pkl"
+  image_suffix: "_ciso.nii.gz"
+  label_suffix: "_LF_seg.nii.gz"
+  patch_size: [128, 128, 128]
+  val_roi_size: [128, 128, 128]
+  train_num_samples: 2    # ← extra patch per volume (nnU-Net style)
+
+# ── Model (nnU-Net-like) ───────────────────────────────────────────────────
+model:
+  in_channels: 1
+  filters: [32, 64, 128, 256, 320, 320]
+  num_seg_classes: 12
+  num_artifact_tasks: 7
+  num_artifact_classes: 3
+
+# ── Training ────────────────────────────────────────────────────────────────
+training:
+  batch_size: 1           # kept at 1 to fit 3 heads + 6 stages on GB10
+  num_workers: 4
+
+  num_warmup_epochs: 50
+  dice_warmup_target: 0.10
+  num_head_warmup_epochs: 0   # disabled (lesson from RUN_0004)
+  num_epochs: 100
+
+  learning_rate: 1.0e-4
+  min_learning_rate: 1.0e-6
+  weight_decay: 3.0e-5        # nnU-Net default
+  joint_learning_rate: 5.0e-5
+  head_warmup_lr: 5.0e-5      # unused (num_head_warmup_epochs=0)
+  max_grad_norm: 1.0
+
+  lambda_1a: 0.5
+  lambda_1b: 1.0
+  lambda_2: 1.0
+
+  loss:
+    focal_gamma: 2.0
+    focal_weight: 0.5
+
+  # From-scratch (no warm-start; RUN_0004 warm-start incompatible with 6-stage)
+  pretrained_checkpoint: ""
+
+early_stopping:
+  patience: 20               # slightly more patient than 0004 (15)
+
+# ── Inference ───────────────────────────────────────────────────────────────
+inference:
+  sw_batch_size: 1
+  overlap: 0.5
+  tta_flip_axes: []
+  keep_largest_component: false
+
+# ── Environment ─────────────────────────────────────────────────────────────
+environment:
+  seed: 42
+  deterministic: true
+  mixed_precision: false
+
+# ── Output ──────────────────────────────────────────────────────────────────
+output:
+  checkpoint_dir: "outputs/checkpoints/RUN_0005"
+  log_dir: "outputs/logs/RUN_0005"
+  results_dir: "results/runs/RUN_0005"

@@ -66,7 +66,7 @@ def main():
 
     print("\n── Task 1a — Artifact classification ──")
     results_1a = evaluate_task1a_multilabel(
-        model, val_loader_1a, device, smoke_test=args.smoke_test
+        model, val_loader_1a, device, smoke_test=args.smoke_test, task_name="1a"
     )
 
     print("\n── Task 1b — Image reconstruction ──")
@@ -75,6 +75,7 @@ def main():
         model, val_loader_1b, device,
         smoke_test=args.smoke_test,
         fid_num_slices_per_volume=fid_slices,
+        task_name="1b",
     )
 
     print("\n── Task 2 — Multi-structure segmentation ──")

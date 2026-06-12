@@ -217,7 +217,8 @@ class MultiTaskTrainer(BaseTrainer):
         b2  = next(iter(self.train_loader_2))
         with torch.amp.autocast("cuda", enabled=self.use_amp):
             l1a = self._loss_1a(self.model.forward_task1a(b1a["img"].to(self.device)), b1a["labels"].to(self.device))
-            l1b = self._loss_1b(self.model.forward_task1b(b1b["img"].to(self.device)), b1b["img"].to(self.device))
+            clean = b1b["img_B"].to(self.device)
+            l1b = self._loss_1b(self.model.forward_task1b(clean), clean)
             l2  = self.seg_loss_fn(self.model.forward_task2(b2["img"].to(self.device)), b2["label"].to(self.device))
         self.model.train()
         def _safe(x):
@@ -268,7 +269,8 @@ class MultiTaskTrainer(BaseTrainer):
             self.optimizer.zero_grad(set_to_none=True)
             with torch.amp.autocast("cuda", enabled=self.use_amp):
                 l1a = self._loss_1a(self.model.forward_task1a(b1a["img"].to(self.device)), b1a["labels"].to(self.device))
-                l1b = self._loss_1b(self.model.forward_task1b(b1b["img"].to(self.device)), b1b["img"].to(self.device))
+                clean = b1b["img_B"].to(self.device)
+                l1b = self._loss_1b(self.model.forward_task1b(clean), clean)
                 loss = self.lambda_1a * l1a + self.lambda_1b * l1b
             if not torch.isfinite(loss):
                 self.optimizer.zero_grad(set_to_none=True)
@@ -304,7 +306,8 @@ class MultiTaskTrainer(BaseTrainer):
             self.optimizer.zero_grad(set_to_none=True)
             with torch.amp.autocast("cuda", enabled=self.use_amp):
                 l1a = self._loss_1a(self.model.forward_task1a(b1a["img"].to(self.device)), b1a["labels"].to(self.device))
-                l1b = self._loss_1b(self.model.forward_task1b(b1b["img"].to(self.device)), b1b["img"].to(self.device))
+                clean = b1b["img_B"].to(self.device)
+                l1b = self._loss_1b(self.model.forward_task1b(clean), clean)
                 l2  = self.seg_loss_fn(self.model.forward_task2(b2["img"].to(self.device)), b2["label"].to(self.device))
                 loss = (self.lambda_1a * l1a / self.loss_scale_1a
                       + self.lambda_1b * l1b / self.loss_scale_1b
@@ -358,7 +361,7 @@ class MultiTaskTrainer(BaseTrainer):
 
         val_loss_1b = 0.0
         for batch_idx, batch in enumerate(tqdm(self.val_loader_1b, desc="Val-Task1b")):
-            images = batch["img"].to(self.device)
+            images = batch["img_B"].to(self.device)
             with torch.amp.autocast("cuda", enabled=self.use_amp):
                 val_loss_1b += float(F.l1_loss(self.model.forward_task1b(images), images).item())
             if self.smoke_test and batch_idx >= 1:

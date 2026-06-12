@@ -86,7 +86,7 @@ Gap to 1st place: ~−0.11 aggregate. Main gap drivers: no artifact simulation, 
 
 | Run ID | Date | Parent | Architecture | T1a Aggr | T1b PSNR | T2 DSC | Decision |
 |--------|------|--------|-------------|----------|----------|--------|----------|
-| [RUN_0004](runs/RUN_0004/AGENTS.md) | 2026-05-20 | RUN_0001/RUN_0003 | DynUNetMultiHead [32..320] + 3 heads | 0.1944 | 3.38 dB | **0.1649** | 🔄 À retester (v5 prête) |
+| [RUN_0004](runs/RUN_0004/AGENTS.md) | **2026-06-12** | RUN_0001/RUN_0003 | DynUNetMultiHead [32..320] + 3 heads | **0.3956** | **21.40 dB** | **0.6205** | **✅ Promoted** |
 
 ---
 
