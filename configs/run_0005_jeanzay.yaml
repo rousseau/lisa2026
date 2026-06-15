@@ -15,11 +15,14 @@ description: >
   nnU-Net v2 auto-configuration recipe: SGD + PolyLR, deep supervision,
   1000 epochs, class-weighted T1a.
 
+run:
+  task: multitask
+
 # ── Data ───────────────────────────────────────────────────────────────────
 data:
-  data_root: "/home/rousseau/Data/LISA2026"
-  bids_root: "/home/rousseau/Data/LISA2026"
-  csv_path: "/home/rousseau/Data/LISA2026/LISA_Task1a_2026.csv"
+  data_root: "${LISA_DATA_ROOT}"
+  bids_root: "${LISA_DATA_ROOT}"
+  csv_path: "${LISA_DATA_ROOT}/LISA_Task1a_2026.csv"
   split_pkl_1a: "results/splits/task1a_fixed.pkl"
   split_pkl_2: "results/splits/task2_fixed.pkl"
   image_suffix: "_ciso.nii.gz"

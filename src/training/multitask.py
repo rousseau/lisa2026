@@ -14,13 +14,26 @@ import torch.nn.functional as F
 from monai.inferers import sliding_window_inference
 from monai.losses import DiceCELoss, SSIMLoss
 from monai.metrics import DiceMetric
-from torch.optim import AdamW
+from torch.optim import AdamW, SGD
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm import tqdm
 
 from src.datasets import get_multitask_dataloaders
 from src.models import DynUNetMultiHeadModel
 from src.training.base import BaseTrainer
+
+
+class PolyLR(torch.optim.lr_scheduler._LRScheduler):
+    """Polynomial learning-rate decay: lr = initial_lr * (1 - epoch/max_epoch)^power."""
+
+    def __init__(self, optimizer, max_epochs, power=0.9, last_epoch=-1):
+        self.max_epochs = max_epochs
+        self.power = power
+        super().__init__(optimizer, last_epoch)
+
+    def get_lr(self):
+        factor = (1 - self.last_epoch / max(1, self.max_epochs)) ** self.power
+        return [base_lr * factor for base_lr in self.base_lrs]
 
 
 class MultiTaskTrainer(BaseTrainer):
@@ -124,16 +137,41 @@ class MultiTaskTrainer(BaseTrainer):
     def _build_optimizer(self) -> None:
         cfg = self.config["training"]
         total_epochs = int(cfg.get("num_warmup_epochs", 10)) + int(cfg.get("num_epochs", 80))
-        self.optimizer = AdamW(
-            self.model.parameters(),
-            lr=float(cfg["learning_rate"]),
-            weight_decay=float(cfg["weight_decay"]),
-        )
-        self.scheduler = CosineAnnealingLR(
-            self.optimizer,
-            T_max=max(1, total_epochs),
-            eta_min=float(cfg.get("min_learning_rate", 1e-6)),
-        )
+        lr = float(cfg["learning_rate"])
+        wd = float(cfg.get("weight_decay", 3e-5))
+        opt_type = cfg.get("optimizer", "adamw").lower()
+
+        if opt_type == "sgd":
+            momentum = float(cfg.get("momentum", 0.99))
+            nesterov = bool(cfg.get("nesterov", True))
+            self.optimizer = SGD(
+                self.model.parameters(),
+                lr=lr,
+                momentum=momentum,
+                weight_decay=wd,
+                nesterov=nesterov,
+            )
+        else:
+            self.optimizer = AdamW(
+                self.model.parameters(),
+                lr=lr,
+                weight_decay=wd,
+            )
+
+        sched_type = cfg.get("scheduler", "cosine").lower()
+        if sched_type == "poly":
+            power = float(cfg.get("poly_power", 0.9))
+            self.scheduler = PolyLR(self.optimizer, max_epochs=max(1, total_epochs), power=power)
+        else:
+            self.scheduler = CosineAnnealingLR(
+                self.optimizer,
+                T_max=max(1, total_epochs),
+                eta_min=float(cfg.get("min_learning_rate", 1e-6)),
+            )
+
+        # Deep supervision config
+        self.use_deep_supervision = bool(self.config.get("model", {}).get("deep_supervision", False))
+        self.ds_weights = cfg.get("deep_supervision_weights", [0.5, 0.25, 0.125, 0.0625, 0.03125])
 
     # ── Pretrained ──────────────────────────────────────────────────────────
 
@@ -219,7 +257,7 @@ class MultiTaskTrainer(BaseTrainer):
             l1a = self._loss_1a(self.model.forward_task1a(b1a["img"].to(self.device)), b1a["labels"].to(self.device))
             clean = b1b["img_B"].to(self.device)
             l1b = self._loss_1b(self.model.forward_task1b(clean), clean)
-            l2  = self.seg_loss_fn(self.model.forward_task2(b2["img"].to(self.device)), b2["label"].to(self.device))
+            l2  = self._seg_loss_with_ds(self.model.forward_task2(b2["img"].to(self.device)), b2["label"].to(self.device))
         self.model.train()
         def _safe(x):
             v = float(x.item())
@@ -227,6 +265,39 @@ class MultiTaskTrainer(BaseTrainer):
         s1a, s1b, s2 = _safe(l1a), _safe(l1b), _safe(l2)
         print(f"[Calibration] 1a={s1a:.4f}  1b={s1b:.4f}  2={s2:.4f}")
         return s1a, s1b, s2
+
+    # ── Deep-supervision helper ──────────────────────────────────────────────
+
+    def _seg_loss_with_ds(self, model_out, labels):
+        """Compute segmentation loss, handling deep-supervision 6-D tensor.
+
+        When deep supervision is enabled, MONAI DynUNet returns a tensor of
+        shape ``[B, N_levels, C, H, W, D]``.  Level 0 is the main output;
+        deeper levels (1..N-1) are progressively downsampled.  We index each
+        level, downsample ``labels`` to match, and apply weighted DiceCE.
+        """
+        if not self.use_deep_supervision or model_out.dim() != 6:
+            return self.seg_loss_fn(model_out, labels)
+
+        total = 0.0
+        n_levels = model_out.shape[1]
+        weights = self.ds_weights
+        for i in range(n_levels):
+            w = float(weights[i]) if i < len(weights) else 0.0
+            if w == 0.0:
+                continue
+            out = model_out[:, i]  # [B, C, H, W, D]
+            # Downsample labels to match this output's spatial size
+            if out.shape[2:] != labels.shape[2:]:
+                lbl_ds = F.interpolate(
+                    labels.float(),
+                    size=out.shape[2:],
+                    mode="nearest",
+                )
+            else:
+                lbl_ds = labels
+            total = total + w * self.seg_loss_fn(out, lbl_ds)
+        return total
 
     # ── Training epoch methods ───────────────────────────────────────────────
 
@@ -242,7 +313,8 @@ class MultiTaskTrainer(BaseTrainer):
             labels = batch["label"].to(self.device)
             self.optimizer.zero_grad(set_to_none=True)
             with torch.amp.autocast("cuda", enabled=self.use_amp):
-                loss = self.seg_loss_fn(self.model.forward_task2(images), labels)
+                out = self.model.forward_task2(images)
+                loss = self._seg_loss_with_ds(out, labels)
             self.scaler.scale(loss).backward()
             self.scaler.unscale_(self.optimizer)
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
@@ -308,7 +380,7 @@ class MultiTaskTrainer(BaseTrainer):
                 l1a = self._loss_1a(self.model.forward_task1a(b1a["img"].to(self.device)), b1a["labels"].to(self.device))
                 clean = b1b["img_B"].to(self.device)
                 l1b = self._loss_1b(self.model.forward_task1b(clean), clean)
-                l2  = self.seg_loss_fn(self.model.forward_task2(b2["img"].to(self.device)), b2["label"].to(self.device))
+                l2  = self._seg_loss_with_ds(self.model.forward_task2(b2["img"].to(self.device)), b2["label"].to(self.device))
                 loss = (self.lambda_1a * l1a / self.loss_scale_1a
                       + self.lambda_1b * l1b / self.loss_scale_1b
                       + self.lambda_2  * l2  / self.loss_scale_2)
@@ -341,7 +413,7 @@ class MultiTaskTrainer(BaseTrainer):
             images = batch["img"].to(self.device)
             labels = batch["label"].to(self.device)
             with torch.amp.autocast("cuda", enabled=self.use_amp):
-                logits = sliding_window_inference(images, roi_size=self.val_roi_size, sw_batch_size=self.sw_batch_size, predictor=self.model.forward_task2, overlap=self.overlap)
+                logits = sliding_window_inference(images, roi_size=self.val_roi_size, sw_batch_size=self.sw_batch_size, predictor=self.model.forward_task2_main, overlap=self.overlap)
             pred = torch.argmax(logits, dim=1, keepdim=True)
             pred_oh = F.one_hot(pred.squeeze(1), num_classes=num_classes).permute(0, 4, 1, 2, 3).float()
             lbl_oh  = F.one_hot(labels.squeeze(1).long(), num_classes=num_classes).permute(0, 4, 1, 2, 3).float()

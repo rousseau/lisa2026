@@ -69,7 +69,7 @@ Gap to 1st place: ~−0.11 aggregate. Main gap drivers: no artifact simulation, 
 
 | Run ID | Date | Parent | Model | Loss | DSC | HD95 | ASSD | Decision |
 |--------|------|--------|-------|------|-----|------|------|---------|
-| [RUN_0003a](runs/RUN_0003a/AGENTS.md) | 2026-06-05 | RUN_0003 | nnU-Net v2 (auto-config) | DiceCE (nnU-Net default) | ⏳ | ⏳ | ⏳ | ⏳ Pending |
+| [RUN_0003a](runs/RUN_0003a/AGENTS.md) | 2026-06-05 (train) / 2026-06-15 (eval) | RUN_0003 | nnU-Net v2 (auto-config) | DiceCE (nnU-Net default) | **0.7695** | **3.93** | **2.24** | ✅ Promoted |
 | [RUN_0003b](runs/RUN_0003b/AGENTS.md) | 2026-06-05 | RUN_0003 | MedSAM2 Encoder (frozen) + DynUNet Decoder | DiceCE | ⏳ | ⏳ | ⏳ | ⏳ Pending |
 | [RUN_0003c](runs/RUN_0003c/AGENTS.md) | 2026-06-05 | 0003a + 0003b | Hybrid Feature Fusion nnU-Net + MedSAM2 | DiceCE | ⏳ | ⏳ | ⏳ | ⏳ Pending |
 

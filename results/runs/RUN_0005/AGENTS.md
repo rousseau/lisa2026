@@ -1,92 +1,89 @@
-# RUN_0005 — Multi-task nnU-Net-like Architecture
+# RUN_0005 — Multi-task nnU-Net-like Architecture (v2 revised 2026-06-15)
 
 ## Run Metadata
 - **Run ID**: 0005
-- **Date**: 2026-06-12
-- **Status**: active (training in progress)
+- **Date**: 2026-06-12 (v1), 2026-06-15 (v2 revision)
+- **Status**: active (training in progress, v2 relaunch on Jean Zay)
 - **Parent Run**: RUN_0004
 - **Tasks Covered**: 1a, 1b, 2
-- **Change Scope**: architectural
+- **Change Scope**: architectural / hyperparameters
 
 ## Parent Baseline
 - **RUN_0004** (multi-task with 5-stage DynUNet):
   - Task 2 DSC: 0.6205
   - Task 1a aggregate: 0.3956
   - Task 1b PSNR: 21.40 dB
-- **Key insight**: 5 stages sufficient, but auto-config from nnU-Net v2 suggests 6 stages with [32..320,320] filters.
+- **RUN_0003a** (nnU-Net v2 Task 2 only):
+  - Task 2 DSC: 0.8220 (after LISA_1001 correction)
+  - Key lesson: SGD + PolyLR, deep supervision, 1000 epochs, 6 stages identical to RUN_0005
 
-## Hypothesis & Changes
+## Hypothesis & Changes (v2 Revision)
 
 ### Motivation
-nnU-Net v2 auto-configuration produced strong results on Task 2 (0.60+ pseudo-Dice by epoch 477). We hypothesise that adopting its architectural recipe (6 stages, deeper bottleneck, higher final channel count) within our multi-task framework will improve all three tasks — especially segmentation — without requiring the full nnU-Net training pipeline.
+RUN_0005 v1 failed due to:
+1. **AdamW + 100 epochs insufficient** for 6-stage convergence from scratch (DSC plateau at ~0.29).
+2. **No deep supervision** (gradient vanishing on deep decoder).
+3. **No class-weighted T1a** (severe class imbalance).
+
+Learning from nnU-Net (RUN_0003a), we apply its proven training recipe while keeping the multi-task heads.
 
 ### Architectural Changes
-| Aspect | RUN_0004 | RUN_0005 |
-|--------|----------|----------|
-| Stages | 5 (32,64,128,256,320) | 6 (32,64,128,256,320,320) |
-| Strides | [(1,1,1),(2,2,2),(2,2,2),(2,2,2),(1,2,2)] | [(1,1,1),(2,2,2),(2,2,2),(2,2,2),(2,2,2),(2,2,2)] |
-| Optimiser | AdamW | AdamW |
-| LR curve | 1e-4 → 5e-5 joint | 1e-4 → 5e-5 joint |
-| Weight decay | 1e-5 | 3e-5 (nnU-Net default) |
-| Epochs | 100 | 100 |
+| Aspect | RUN_0004 | RUN_0005 v1 | RUN_0005 v2 |
+|--------|----------|-------------|---------------|
+| Stages | 5 (32,64,128,256,320) | 6 (32..320,320) | 6 (32..320,320) |
+| Deep supervision | No | No | **Yes (5 levels)** |
+| Optimiser | AdamW | AdamW | **SGD + Nesterov** |
+| LR schedule | CosineAnnealingLR | CosineAnnealingLR | **PolyLR (power=0.9)** |
+| Initial LR | 1e-4 | 1e-4 | **1e-2** |
+| Epochs | 100 | 100 | **1000** |
+| Patience | 15 | 20 | **200** |
+| Class-weighted T1a | No | No | **Yes** |
 
 ### Data & Augmentation
 - Patch size: 128³
-- Samples/volume: 2 (nnU-Net style; was 1 in 0004)
-- 33% foreground oversampling (`oversample_foreground: 0.333`)
-- Same spatial & intensity augmentation pipeline as 0004
+- Samples/volume: 2
+- 33% foreground oversampling
+- Same spatial & intensity augmentation as 0004
 
 ### Training Strategy
-- Warm-start: **None** (RUN_0004 warm-start incompatible due to stage mismatch).
-- Warm-up: 50 epochs Task 2 only (same as 0004).
-- Head warm-up: disabled (lesson from RUN_0004).
+- Warm-start: **None** (5→6 stage mismatch with RUN_0004).
+- Warm-up: 50 epochs Task 2 only.
+- Head warm-up: disabled.
 - Calibration: automatic loss-scale calibration at joint phase start.
 
-### What We Keep from RUN_0004
-- Classification head architecture (GAP → MLP)
-- Reconstruction decoder (UpBlock3d stack)
-- Focal-Dice hybrid loss for segmentation
-- Multi-task loss weighting (λ=0.5/1.0/1.0)
-- Evaluation bug fixes (`task_name` routing, `torch.no_grad()`)
-
-## Assumptions
-1. Deeper encoder (6 stages) improves feature representation for all tasks.
-2. `(2,2,2)` stride at level 5 (instead of nnU-Net's `(1,2,2)`) is safe in DynUNet decoder without risk of shape mismatch under time pressure.
-3. 3e-5 weight decay (nnU-Net default) generalises better than 1e-5.
-4. 2 samples/volume + foreground oversampling improves foreground class learning.
-
-## Risks & Mitigations
-| Risk | Likelihood | Mitigation |
-|------|------------|------------|
-| 6 stages OOM on GB10 | Medium | Batch size 1, no deep supervision |
-| Shape mismatch in decoder | Low | Conservative all-(2,2,2) strides |
-| Slower convergence (no warm-start) | High | 50-epoch warm-up, patient early stopping (20) |
-| Augmentation too aggressive | Medium | Same as 0004 (proven stable) |
-
-## Implementation Plan
-- [x] Generalise `DynUNetMultiHeadModel` to N-stage (ModuleList recon_ups, dynamic cls_mlp)
-- [x] Create `configs/run_0005_multitask.yaml`
-- [x] Add `oversample_foreground` to transforms / loaders
-- [x] Smoke test — passed
-- [ ] Full training (local GB10 or Jean Zay 4×H100)
+## Implementation Plan (v2)
+- [x] Generalise `DynUNetMultiHeadModel` to N-stage (already done v1)
+- [x] Enable `deep_supervision=True` in MONAI `DynUNet`
+- [x] Implement `PolyLR` scheduler matching nnU-Net recipe
+- [x] Implement SGDOptimizer + momentum 0.99 + Nesterov
+- [x] Implement `_seg_loss_with_ds` handling MONAI 6-D deep-supervision tensor
+- [x] Add `forward_task2_main` for inference (extracts level 0 from 6-D tensor)
+- [x] Create `configs/run_0005_jeanzay.yaml` for Jean Zay single-GPU
+- [x] Adapt SLURM script: 1×H100, 24h max
+- [x] Smoke test passed locally
+- [ ] Full training on Jean Zay H100
 - [ ] Evaluation on validation set
 - [ ] Compare with RUN_0004
 
 ## Training & Evaluation Configuration
-- **Config**: `configs/run_0005_multitask.yaml`
+- **Config local**: `configs/run_0005_multitask.yaml`
+- **Config Jean Zay**: `configs/run_0005_jeanzay.yaml`
 - **Batch size**: 1
 - **Patch size**: 128×128×128
-- **Epochs**: 100
+- **Epochs**: 1000
 - **Warm-up**: 50 epochs
-- **Early stopping patience**: 20
+- **Early stopping patience**: 200
 - **Checkpoint**: `outputs/checkpoints/RUN_0005/multitask_best.pt`
+- **Hardware**: 1× H100 80GB (Jean Zay, no DDP)
 
 ## Results Summary
-- (training in progress)
+- v1: Task 2 DSC=0.2946 (failed — under-trained)
+- v2: Pending Jean Zay execution
 
 ## Comparability Statement
 - **Architecture change** (5→6 stages) makes weight-level comparison impossible, but metrics-level comparison valid since all other hyperparameters, data splits, and augmentations are identical.
 - **No warm-start** means convergence speed differs; final metrics are the primary comparison.
+- v2 uses nnU-Net training recipe learned from RUN_0003a, making the comparison RUN_0005 v2 vs RUN_0003a particularly informative for multi-task impact on segmentation.
 
 ## Decision
-- **Pending** — awaiting training completion.
+- **Pending v2 evaluation** — awaiting Jean Zay training completion.

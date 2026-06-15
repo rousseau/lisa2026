@@ -88,7 +88,7 @@ class DynUNetMultiHeadModel(nn.Module):
             upsample_kernel_size=upsample_kernel_size,
             filters=f,
             norm_name=norm_name,
-            deep_supervision=False,
+            deep_supervision=True,
         )
 
         # ── Task 1a: classification head ──────────────────────────────────────
@@ -182,9 +182,18 @@ class DynUNetMultiHeadModel(nn.Module):
 
     # ── Task-specific forwards ───────────────────────────────────────────────
 
-    def forward_task2(self, x: torch.Tensor) -> torch.Tensor:
-        """Full DynUNet forward — identical to ``Task2DynUNetModel.forward()`` ."""
+    def forward_task2(self, x: torch.Tensor):
+        """Return raw DynUNet output — with deep supervision enabled this is
+        a 6-D tensor ``[B, N_levels, C, H, W, D]``."""
         return self.model(x)
+
+    def forward_task2_main(self, x: torch.Tensor) -> torch.Tensor:
+        """Return only the main (full-resolution) segmentation output [B, C, H, W, D]."""
+        out = self.model(x)
+        # MONAI DynUNet with deep_supervision=True returns [B, N_levels, C, H, W, D]
+        if out.dim() == 6:
+            return out[:, 0]  # first level = main output
+        return out
 
     def forward_task1a(self, x: torch.Tensor) -> torch.Tensor:
         """Returns classification logits [B, num_artifact_tasks, num_artifact_classes]."""

@@ -17,9 +17,9 @@
 #SBATCH -C h100
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --gres=gpu:4
-#SBATCH --cpus-per-task=40
-#SBATCH --time=20:00:00
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=10
+#SBATCH --time=24:00:00
 #SBATCH --partition=gpu_p6
 #SBATCH --qos=qos_gpu_h100-t4
 #SBATCH --output=outputs/logs/%x_%j.out
@@ -184,10 +184,10 @@ if [[ -f "$JZ_CONFIG" ]]; then
             # Generic handling for other runs
             TASK=$(python3 -c "import yaml; print(yaml.safe_load(open('$JZ_CONFIG'))['run']['task'])")
             case "$TASK" in
-                1a)        MODULE="src.train_task1a" ;;
-                1b)        MODULE="src.train_task1b" ;;
-                2)         MODULE="src.train_task2"  ;;
-                multitask) MODULE="src.train_multitask" ;;
+                1a)        MODULE="src.runners.train_task1a" ;;
+                1b)        MODULE="src.runners.train_task1b" ;;
+                2)         MODULE="src.runners.train_task2"  ;;
+                multitask) MODULE="src.runners.train_multitask" ;;
                 *)         echo "[ERREUR] Tache inconnue : $TASK"; exit 1 ;;
             esac
             python3 -m "$MODULE" --config "$JZ_CONFIG" $SMOKE_FLAG
@@ -212,10 +212,10 @@ else
     if [[ -f "$JZ_CONFIG" ]]; then
         TASK=$(python3 -c "import yaml; print(yaml.safe_load(open('$JZ_CONFIG'))['run']['task'])")
     case "$TASK" in
-        1a)        EVAL_MODULE="src.evaluate_task1a" ;;
-        1b)        EVAL_MODULE="src.evaluate_task1b" ;;
-        2)         EVAL_MODULE="src.evaluate_task2"  ;;
-        multitask) EVAL_MODULE="src.evaluate_multitask" ;;
+        1a)        EVAL_MODULE="src.runners.evaluate_task1a" ;;
+        1b)        EVAL_MODULE="src.runners.evaluate_task1b" ;;
+        2)         EVAL_MODULE="src.runners.evaluate_task2"  ;;
+        multitask) EVAL_MODULE="src.runners.evaluate_multitask" ;;
         *)         echo "[ERREUR] Tâche inconnue : $TASK"; exit 1 ;;
     esac
     python3 -m "$EVAL_MODULE" --config "$JZ_CONFIG" $SMOKE_FLAG
