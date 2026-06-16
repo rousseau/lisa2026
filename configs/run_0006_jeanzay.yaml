@@ -1,0 +1,100 @@
+# RUN_0006 — Warm-start RUN_0004 + lambda_1a=0.1 + LCC (Jean Zay)
+#
+# Identique à run_0006_multitask.yaml mais avec les chemins de données Jean Zay.
+
+run_id: "0006"
+run_name: "multitask_warmstart_run0004_lambda01_lcc"
+date: "2026-06-16"
+description: >
+  Warm-start encoder from RUN_0004 (5 stages), add 6th stage, reset all 3 heads.
+  lambda_1a reduced to 0.1. Post-processing LCC enabled.
+
+run:
+  task: multitask
+
+# ── Data ───────────────────────────────────────────────────────────────────
+data:
+  data_root: "${LISA_DATA_ROOT}"
+  bids_root: "${LISA_DATA_ROOT}"
+  csv_path: "${LISA_DATA_ROOT}/LISA_Task1a_2026.csv"
+  split_pkl_1a: "results/splits/task1a_fixed.pkl"
+  split_pkl_2: "results/splits/task2_fixed.pkl"
+  image_suffix: "_ciso.nii.gz"
+  label_suffix: "_LF_seg.nii.gz"
+  patch_size: [128, 128, 128]
+  val_roi_size: [128, 128, 128]
+  train_num_samples: 2
+
+# ── Model (6-stage, warm-started from RUN_0004) ────────────────────────────
+model:
+  in_channels: 1
+  filters: [32, 64, 128, 256, 320, 320]
+  num_seg_classes: 12
+  num_artifact_tasks: 7
+  num_artifact_classes: 3
+  deep_supervision: true
+  reset_heads: true  # Reset all 3 heads after encoder warm-start
+
+# ── Training ────────────────────────────────────────────────────────────────
+training:
+  batch_size: 1
+  num_workers: 4
+
+  num_warmup_epochs: 50
+  dice_warmup_target: 0.10
+  num_head_warmup_epochs: 0
+  num_epochs: 1000
+
+  # SGD + Nesterov (nnU-Net default)
+  optimizer: "sgd"
+  learning_rate: 1.0e-2
+  min_learning_rate: 1.0e-6
+  weight_decay: 3.0e-5
+  momentum: 0.99
+  nesterov: true
+
+  # PolyLR schedule
+  scheduler: "poly"
+  poly_power: 0.9
+
+  joint_learning_rate: 5.0e-3
+  head_warmup_lr: 5.0e-5
+  max_grad_norm: 12.0
+
+  lambda_1a: 0.1   # Reduced from 0.5 to prevent gradient domination
+  lambda_1b: 1.0
+  lambda_2: 1.0
+
+  loss:
+    focal_gamma: 2.0
+    focal_weight: 0.5
+
+  # Deep supervision weights (deepest -> shallowest)
+  deep_supervision_weights: [0.5, 0.25, 0.125, 0.0625, 0.03125]
+
+  # Warm-start encoder from RUN_0004 best checkpoint
+  pretrained_checkpoint: "outputs/checkpoints/RUN_0004/multitask_best.pt"
+  # Only load encoder weights (model.* keys), ignore heads (cls_*, recon_*)
+  pretrained_load_mode: "encoder_only"
+
+early_stopping:
+  patience: 200
+
+# ── Inference ───────────────────────────────────────────────────────────────
+inference:
+  sw_batch_size: 1
+  overlap: 0.5
+  tta_flip_axes: []
+  keep_largest_component: true  # Enable post-processing
+
+# ── Environment ─────────────────────────────────────────────────────────────
+environment:
+  seed: 42
+  deterministic: true
+  mixed_precision: true
+
+# ── Output ──────────────────────────────────────────────────────────────────
+output:
+  checkpoint_dir: "outputs/checkpoints/RUN_0006"
+  log_dir: "outputs/logs/RUN_0006"
+  results_dir: "results/runs/RUN_0006"

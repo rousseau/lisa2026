@@ -186,12 +186,22 @@ class MultiTaskTrainer(BaseTrainer):
         try:
             src_sd = torch.load(pretrained, map_location=self.device).get("model_state_dict", {})
             tgt_sd = self.model.state_dict()
-            loaded = [k for k, v in src_sd.items() if k in tgt_sd and v.shape == tgt_sd[k].shape]
+
+            load_mode = self.config["training"].get("pretrained_load_mode", "all")
+            if load_mode == "encoder_only":
+                # Only load backbone keys (DynUNet model.*), skip all heads
+                loaded = [k for k, v in src_sd.items() if k.startswith("model.") and k in tgt_sd and v.shape == tgt_sd[k].shape]
+            else:
+                loaded = [k for k, v in src_sd.items() if k in tgt_sd and v.shape == tgt_sd[k].shape]
+
             for k in loaded:
                 tgt_sd[k] = src_sd[k]
             self.model.load_state_dict(tgt_sd)
             self.pretrained_loaded = True
             print(f"[INFO] Partial warm-start from {pretrained}: {len(loaded)}/{len(tgt_sd)} keys.")
+
+            if self.config["model"].get("reset_heads", False):
+                self.model.reset_heads()
         except Exception as exc:
             warnings.warn(f"[WARNING] Failed to load pretrained checkpoint: {exc}. Training from scratch.", stacklevel=2)
 
@@ -497,9 +507,20 @@ class MultiTaskTrainer(BaseTrainer):
         prev_lr = self.optimizer.param_groups[0]["lr"]
         for pg in self.optimizer.param_groups:
             pg["lr"] = self.joint_lr
-        self.scheduler = CosineAnnealingLR(self.optimizer, T_max=max(1, self.num_epochs), eta_min=float(self.config["training"].get("min_learning_rate", 1e-6)))
+
+        # Rebuild scheduler for joint phase respecting config
+        sched_type = self.config["training"].get("scheduler", "cosine").lower()
+        if sched_type == "poly":
+            power = float(self.config["training"].get("poly_power", 0.9))
+            self.scheduler = PolyLR(self.optimizer, max_epochs=max(1, self.num_epochs), power=power)
+        else:
+            self.scheduler = CosineAnnealingLR(
+                self.optimizer,
+                T_max=max(1, self.num_epochs),
+                eta_min=float(self.config["training"].get("min_learning_rate", 1e-6)),
+            )
         self.scaler = torch.amp.GradScaler("cuda", enabled=self.use_amp)
-        print(f"[Joint setup] LR {prev_lr:.2e} -> {self.joint_lr:.2e} | GradScaler reset")
+        print(f"[Joint setup] LR {prev_lr:.2e} -> {self.joint_lr:.2e} | scheduler={sched_type} | GradScaler reset")
 
         self.loss_scale_1a, self.loss_scale_1b, self.loss_scale_2 = self._calibrate_losses()
         run_meta["loss_scale_1a"] = self.loss_scale_1a

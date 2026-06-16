@@ -141,6 +141,34 @@ class DynUNetMultiHeadModel(nn.Module):
             print("[INFO] Remapped old recon_upN keys -> recon_ups for backward compat.")
         super().load_state_dict(mapped, strict=strict)
 
+    def reset_heads(self) -> None:
+        """Re-initialise all three task-specific heads (1a, 1b, 2).
+
+        Used after loading a pretrained encoder so that the heads start
+        from random weights rather than inheriting potentially incompatible
+        values from a previous training run (option B)."""
+        self._init_new_heads()
+        # Re-initialise DynUNet output_block (Task 2 head)
+        with torch.no_grad():
+            for m in self.model.output_block.modules():
+                if isinstance(m, (nn.Conv3d, nn.ConvTranspose3d)):
+                    nn.init.kaiming_normal_(m.weight, nonlinearity="relu")
+                    if m.bias is not None:
+                        nn.init.zeros_(m.bias)
+                elif isinstance(m, (nn.InstanceNorm3d, nn.BatchNorm3d)):
+                    if m.weight is not None:
+                        nn.init.ones_(m.weight)
+                    if m.bias is not None:
+                        nn.init.zeros_(m.bias)
+            # Re-initialise DynUNet upsample blocks
+            for up in self.model.upsamples:
+                for m in up.modules():
+                    if isinstance(m, (nn.Conv3d, nn.ConvTranspose3d)):
+                        nn.init.kaiming_normal_(m.weight, nonlinearity="relu")
+                        if m.bias is not None:
+                            nn.init.zeros_(m.bias)
+        print("[INFO] All task heads reset to random initialisation.")
+
     # ── Head initialisation ──────────────────────────────────────────────────
 
     def _init_new_heads(self) -> None:
