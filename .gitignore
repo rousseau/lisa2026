@@ -1,5 +1,9 @@
 # ── Données lourdes (jamais versionnées) ────────────────────────────────────
 outputs/          # images, prédictions, checkpoints générés localement
+nnUNet_preprocessed/
+nnUNet_raw/
+nnUNet_results/
+external/         # MedSAM2, nnU-Net dependencies (managed separately via submodules)
 *.nii
 *.nii.gz
 *.npy
