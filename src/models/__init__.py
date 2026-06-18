@@ -2,6 +2,7 @@
 
 from .blocks import DoubleConv3d, UpBlock3d
 from .multitask import DynUNetMultiHeadModel
+from .plainconv_multihead import PlainConvMultiHeadModel
 from .task1a import Task1aOrdinalModel
 from .task1b import Discriminator3D, Generator3D
 from .task2 import Task2DynUNetModel
@@ -18,4 +19,5 @@ __all__ = [
     "Task2MedSAM2Model",
     "Task2HybridModel",
     "DynUNetMultiHeadModel",
+    "PlainConvMultiHeadModel",
 ]

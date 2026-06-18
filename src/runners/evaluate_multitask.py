@@ -14,7 +14,7 @@ from src.evaluation import (
     evaluate_task1b,
     evaluate_task2,
 )
-from src.models import DynUNetMultiHeadModel
+from src.models import DynUNetMultiHeadModel, PlainConvMultiHeadModel
 
 
 def main():
@@ -36,13 +36,25 @@ def main():
     )
 
     model_cfg = config["model"]
-    model = DynUNetMultiHeadModel(
-        in_channels=int(model_cfg.get("in_channels", 1)),
-        filters=tuple(int(x) for x in model_cfg["filters"]),
-        num_seg_classes=int(model_cfg["num_seg_classes"]),
-        num_artifact_tasks=int(model_cfg["num_artifact_tasks"]),
-        num_artifact_classes=int(model_cfg["num_artifact_classes"]),
-    ).to(device)
+    model_type = model_cfg.get("type", "dynunet").lower()
+    if model_type in ("plainconv", "nnunet", "plainconv_multihead"):
+        model = PlainConvMultiHeadModel(
+            input_channels=int(model_cfg.get("in_channels", 1)),
+            n_stages=int(model_cfg.get("n_stages", 6)),
+            features_per_stage=tuple(int(x) for x in model_cfg.get("features_per_stage", (32, 64, 128, 256, 320, 320))),
+            strides=tuple(tuple(int(s) for s in st) for st in model_cfg.get("strides", ((1, 1, 1), (2, 2, 2), (2, 2, 2), (2, 2, 2), (2, 2, 2), (1, 2, 2)))),
+            num_seg_classes=int(model_cfg["num_seg_classes"]),
+            num_artifact_tasks=int(model_cfg["num_artifact_tasks"]),
+            num_artifact_classes=int(model_cfg["num_artifact_classes"]),
+        ).to(device)
+    else:
+        model = DynUNetMultiHeadModel(
+            in_channels=int(model_cfg.get("in_channels", 1)),
+            filters=tuple(int(x) for x in model_cfg["filters"]),
+            num_seg_classes=int(model_cfg["num_seg_classes"]),
+            num_artifact_tasks=int(model_cfg["num_artifact_tasks"]),
+            num_artifact_classes=int(model_cfg["num_artifact_classes"]),
+        ).to(device)
 
     ckpt_path = os.path.join(config["output"]["checkpoint_dir"], "multitask_best.pt")
     if not os.path.exists(ckpt_path):

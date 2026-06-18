@@ -19,7 +19,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm import tqdm
 
 from src.datasets import get_multitask_dataloaders
-from src.models import DynUNetMultiHeadModel
+from src.models import DynUNetMultiHeadModel, PlainConvMultiHeadModel
 from src.training.base import BaseTrainer
 
 
@@ -114,13 +114,25 @@ class MultiTaskTrainer(BaseTrainer):
 
     def _build_model(self) -> None:
         cfg = self.config["model"]
-        self.model = DynUNetMultiHeadModel(
-            in_channels=int(cfg.get("in_channels", 1)),
-            filters=tuple(int(x) for x in cfg["filters"]),
-            num_seg_classes=int(cfg["num_seg_classes"]),
-            num_artifact_tasks=int(cfg["num_artifact_tasks"]),
-            num_artifact_classes=int(cfg["num_artifact_classes"]),
-        ).to(self.device)
+        model_type = cfg.get("type", "dynunet").lower()
+        if model_type in ("plainconv", "nnunet", "plainconv_multihead"):
+            self.model = PlainConvMultiHeadModel(
+                input_channels=int(cfg.get("in_channels", 1)),
+                n_stages=int(cfg.get("n_stages", 6)),
+                features_per_stage=tuple(int(x) for x in cfg.get("features_per_stage", (32, 64, 128, 256, 320, 320))),
+                strides=tuple(tuple(int(s) for s in st) for st in cfg.get("strides", ((1, 1, 1), (2, 2, 2), (2, 2, 2), (2, 2, 2), (2, 2, 2), (1, 2, 2)))),
+                num_seg_classes=int(cfg["num_seg_classes"]),
+                num_artifact_tasks=int(cfg["num_artifact_tasks"]),
+                num_artifact_classes=int(cfg["num_artifact_classes"]),
+            ).to(self.device)
+        else:
+            self.model = DynUNetMultiHeadModel(
+                in_channels=int(cfg.get("in_channels", 1)),
+                filters=tuple(int(x) for x in cfg["filters"]),
+                num_seg_classes=int(cfg["num_seg_classes"]),
+                num_artifact_tasks=int(cfg["num_artifact_tasks"]),
+                num_artifact_classes=int(cfg["num_artifact_classes"]),
+            ).to(self.device)
 
     def _build_dataloaders(self) -> None:
         loaders = get_multitask_dataloaders(self.config)
@@ -184,16 +196,24 @@ class MultiTaskTrainer(BaseTrainer):
             warnings.warn(f"[WARNING] Pretrained checkpoint not found: {pretrained}. Training from scratch.", stacklevel=2)
             return
         try:
+            # Handle nnU-Net v2 checkpoint format (for PlainConvMultiHeadModel)
+            if hasattr(self.model, 'load_pretrained_nnunet'):
+                n_loaded = self.model.load_pretrained_nnunet(pretrained, device=self.device)
+                if n_loaded > 0:
+                    self.pretrained_loaded = True
+                    print(f"[INFO] PlainConvMultiHead warm-started: {n_loaded} keys loaded.")
+                else:
+                    warnings.warn(f"[WARNING] No keys loaded from nnU-Net checkpoint. Training from scratch.", stacklevel=2)
+                return
+
+            # Legacy DynUNet path
             src_sd = torch.load(pretrained, map_location=self.device).get("model_state_dict", {})
             tgt_sd = self.model.state_dict()
-
             load_mode = self.config["training"].get("pretrained_load_mode", "all")
             if load_mode == "encoder_only":
-                # Only load backbone keys (DynUNet model.*), skip all heads
                 loaded = [k for k, v in src_sd.items() if k.startswith("model.") and k in tgt_sd and v.shape == tgt_sd[k].shape]
             else:
                 loaded = [k for k, v in src_sd.items() if k in tgt_sd and v.shape == tgt_sd[k].shape]
-
             for k in loaded:
                 tgt_sd[k] = src_sd[k]
             self.model.load_state_dict(tgt_sd)

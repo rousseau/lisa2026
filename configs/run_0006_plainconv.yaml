@@ -1,7 +1,7 @@
-# RUN_0006 — Multi-task nnU-Net v2 PlainConvUNet (Jean Zay)
+# RUN_0006 — Multi-task nnU-Net v2 PlainConvUNet (refactor depuis DynUNet)
 #
-# Identique à run_0006_plainconv.yaml mais avec les chemins de données Jean Zay.
-
+# Objectif: reprendre l'architecture exacte de RUN_0003a (nnU-Net v2, DSC=0.8220)
+# et ajouter les 3 têtes multi-tâche.
 run_id: "0006"
 run_name: "multitask_plainconv_nnunet_v2"
 task: "1a+1b+2"
@@ -10,11 +10,14 @@ description: >
   PlainConvUNet (nnU-Net v2 backbone) avec Task 1a/1b/2.
   Warm-start depuis checkpoint_best.pth de RUN_0003a.
 
+run:
+  task: multitask
+
 # ── Data ───────────────────────────────────────────────────────────────────
 data:
-  data_root: "${LISA_DATA_ROOT}"
-  bids_root: "${LISA_DATA_ROOT}"
-  csv_path: "${LISA_DATA_ROOT}/LISA_Task1a_2026.csv"
+  data_root: "/home/rousseau/Data/LISA2026"
+  bids_root: "/home/rousseau/Data/LISA2026"
+  csv_path: "/home/rousseau/Data/LISA2026/LISA_Task1a_2026.csv"
   split_pkl_1a: "results/splits/task1a_fixed.pkl"
   split_pkl_2: "results/splits/task2_fixed.pkl"
   image_suffix: "_ciso.nii.gz"
