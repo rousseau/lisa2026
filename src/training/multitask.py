@@ -65,6 +65,10 @@ class MultiTaskTrainer(BaseTrainer):
         self._build_optimizer()
         self._load_pretrained()
 
+        # Freeze encoder (Option B): keep nnU-Net backbone fixed, train heads only
+        if hasattr(self.model, 'freeze_encoder'):
+            self.model.freeze_encoder()
+
         # ── Loss functions ────────────────────────────────────────────────────
         loss_cfg = config["training"].get("loss", {})
         self.focal_gamma = float(loss_cfg.get("focal_gamma", 2.0))
@@ -133,6 +137,19 @@ class MultiTaskTrainer(BaseTrainer):
                 num_artifact_tasks=int(cfg["num_artifact_tasks"]),
                 num_artifact_classes=int(cfg["num_artifact_classes"]),
             ).to(self.device)
+
+        # Optional torch.compile (PyTorch 2.x) — can accelerate forward/backward
+        if self.config["training"].get("torch_compile", False):
+            print("[INFO] Compiling model with torch.compile() ...")
+            try:
+                self.model = torch.compile(self.model)
+                print("[INFO] Model compilation successful.")
+            except Exception as exc:
+                warnings.warn(
+                    f"[WARNING] torch.compile failed: {exc}. "
+                    f"Continuing without compilation.",
+                    stacklevel=2,
+                )
 
     def _build_dataloaders(self) -> None:
         loaders = get_multitask_dataloaders(self.config)

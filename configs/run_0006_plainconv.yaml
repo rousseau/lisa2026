@@ -63,6 +63,7 @@ training:
   joint_learning_rate: 5.0e-3
   head_warmup_lr: 5.0e-5
   max_grad_norm: 12.0
+  torch_compile: true
 
   lambda_1a: 0.1
   lambda_1b: 1.0

@@ -115,6 +115,20 @@ class PlainConvMultiHeadModel(nn.Module):
         if self.recon_out.bias is not None:
             nn.init.zeros_(self.recon_out.bias)
 
+    # ── Encoder freeze / unfreeze ────────────────────────────────────────────
+
+    def freeze_encoder(self):
+        """Freeze encoder parameters (backbone from nnU-Net)."""
+        for p in self.encoder.parameters():
+            p.requires_grad = False
+        print("[INFO] Encoder frozen —", sum(1 for _ in self.encoder.parameters()), "params")
+
+    def unfreeze_encoder(self):
+        """Unfreeze encoder parameters (for progressive unfreezing)."""
+        for p in self.encoder.parameters():
+            p.requires_grad = True
+        print("[INFO] Encoder unfrozen")
+
     # ── Load from nnU-Net v2 checkpoint ──────────────────────────────────────
 
     def load_pretrained_nnunet(self, ckpt_path: str, device="cpu") -> int:
