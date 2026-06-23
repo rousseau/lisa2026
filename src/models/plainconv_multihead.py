@@ -129,6 +129,30 @@ class PlainConvMultiHeadModel(nn.Module):
             p.requires_grad = True
         print("[INFO] Encoder unfrozen")
 
+    def freeze_decoder(self):
+        """Freeze decoder parameters (Task 2 head from nnU-Net)."""
+        for p in self.decoder.parameters():
+            p.requires_grad = False
+        print("[INFO] Decoder frozen —", sum(1 for _ in self.decoder.parameters()), "params")
+
+    def unfreeze_decoder(self):
+        """Unfreeze decoder parameters."""
+        for p in self.decoder.parameters():
+            p.requires_grad = True
+        print("[INFO] Decoder unfrozen")
+
+    def freeze_task2(self):
+        """Freeze encoder + decoder (complete Task 2 backbone)."""
+        self.freeze_encoder()
+        self.freeze_decoder()
+        print("[INFO] Complete Task 2 backbone frozen")
+
+    def unfreeze_task2(self):
+        """Unfreeze encoder + decoder."""
+        self.unfreeze_encoder()
+        self.unfreeze_decoder()
+        print("[INFO] Complete Task 2 backbone unfrozen")
+
     # ── Load from nnU-Net v2 checkpoint ──────────────────────────────────────
 
     def load_pretrained_nnunet(self, ckpt_path: str, device="cpu") -> int:

@@ -65,9 +65,10 @@ class MultiTaskTrainer(BaseTrainer):
         self._build_optimizer()
         self._load_pretrained()
 
-        # Freeze encoder (Option B): keep nnU-Net backbone fixed, train heads only
-        if hasattr(self.model, 'freeze_encoder'):
-            self.model.freeze_encoder()
+        # Freeze complete Task 2 backbone (Option C): keep nnU-Net backbone + decoder fixed,
+        # train only Task 1a and Task 1b heads.
+        if hasattr(self.model, 'freeze_task2'):
+            self.model.freeze_task2()
 
         # ── Loss functions ────────────────────────────────────────────────────
         loss_cfg = config["training"].get("loss", {})
