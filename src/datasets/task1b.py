@@ -71,18 +71,30 @@ def _load_split_subjects(split_pkl: str, fold: str) -> Optional[List[str]]:
     return split.get(key)  # None if key absent
 
 
-def _build_transforms(spatial_size: Tuple[int, ...], stage: str) -> Compose:
+def _build_transforms(
+    spatial_size: Tuple[int, ...], stage: str, use_nnunet_preprocessing: bool = False
+) -> Compose:
     keys = ["img"]
-    base = [
-        LoadImaged(keys=keys, reader="nibabelreader"),
-        EnsureChannelFirstd(keys=keys),
-        NormalizeIntensityd(keys=keys, nonzero=False, channel_wise=True),
-        # Scale to [-1, 1] to match Generator Tanh output range
-        ScaleIntensityd(keys=keys, minv=-1.0, maxv=1.0),
+    if use_nnunet_preprocessing:
+        from .nnunet_preprocessor import LoadAndPreprocessNnunetd
+
+        base = [
+            LoadAndPreprocessNnunetd(keys=["img", "label"], allow_missing_keys=True),
+            EnsureTyped(keys=keys),
+        ]
+    else:
+        base = [
+            LoadImaged(keys=keys, reader="nibabelreader"),
+            EnsureChannelFirstd(keys=keys),
+            NormalizeIntensityd(keys=keys, nonzero=False, channel_wise=True),
+        ]
+    # Scale to [-1, 1] to match Generator Tanh output range
+    base.append(ScaleIntensityd(keys=keys, minv=-1.0, maxv=1.0))
+    base.extend([
         CenterSpatialCropd(keys=keys, roi_size=spatial_size),
         SpatialPadd(keys=keys, spatial_size=spatial_size, mode="symmetric"),
         EnsureTyped(keys=keys),
-    ]
+    ])
     if stage == "train":
         base.extend([
             RandFlipd(keys=keys, prob=0.5, spatial_axis=0),
@@ -146,11 +158,17 @@ class Task1bCycleGANDataset(Dataset):
         noise_threshold: int = 1,
         motion_threshold: int = 1,
         domain: str = "both",
+        use_nnunet_preprocessing: bool = False,
+        data_root_fallbacks: Optional[List[str]] = None,
     ) -> None:
         self.data_root = data_root
+        self.data_root_fallbacks = list(data_root_fallbacks) if data_root_fallbacks else []
         self.spatial_size = tuple(spatial_size)
         self.domain = domain
-        self.transforms = _build_transforms(self.spatial_size, stage)
+        self.transforms = _build_transforms(
+            self.spatial_size, stage,
+            use_nnunet_preprocessing=use_nnunet_preprocessing,
+        )
 
         # ── Load CSV ──────────────────────────────────────────────────────
         df = pd.read_csv(csv_path)
@@ -205,14 +223,19 @@ class Task1bCycleGANDataset(Dataset):
     def _resolve_paths(self, df: pd.DataFrame, suffix: str) -> List[str]:
         """Return existing NIfTI paths for subjects in df.
 
-        Files are stored flat in data_root as ``{subject}{suffix}``,
-        e.g. ``/data/LISA_0001_ciso.nii.gz``.
+        Files are searched in ``self.data_root`` first, then in any
+        fallback directories listed in ``self.data_root_fallbacks``.
         """
+        roots = [self.data_root]
+        if getattr(self, "data_root_fallbacks", None):
+            roots.extend(self.data_root_fallbacks)
         paths = []
         for subject in df["subject"]:
-            p = os.path.join(self.data_root, f"{subject}{suffix}")
-            if os.path.isfile(p):
-                paths.append(p)
+            for root in roots:
+                p = os.path.join(root, f"{subject}{suffix}")
+                if os.path.isfile(p):
+                    paths.append(p)
+                    break
         return paths
 
     # ── Dataset interface ─────────────────────────────────────────────────────

@@ -2,7 +2,7 @@
 
 Global tracking table for all experimental runs.
 
-Last updated: 2026-06-16 (RUN_0005 evaluation completed)
+Last updated: 2026-06-23 (RUN_0006 preprocessing fix validated, DSC=0.9345)
 
 ---
 
@@ -88,7 +88,7 @@ Gap to 1st place: ~−0.11 aggregate. Main gap drivers: no artifact simulation, 
 |--------|------|--------|-------------|----------|----------|--------|----------|
 | [RUN_0004](runs/RUN_0004/AGENTS.md) | **2026-06-12** | RUN_0001/RUN_0003 | DynUNetMultiHead [32..320] + 3 heads | **0.3956** | **21.40 dB** | **0.6205** | **✅ Promoted** |
 | [RUN_0005](runs/RUN_0005/AGENTS.md) | **2026-06-15/16** | RUN_0004 | DynUNetMultiHead 6-stage [32..320,320] + deep supervision + SGD/PolyLR | 0.4887 | 25.90 dB | **0.3523** | ❌ Rejected |
-| [RUN_0006](runs/RUN_0006/AGENTS.md) | **2026-06-16** | RUN_0005 | DynUNetMultiHead 6-stage [32..320,320] + warm-start RUN_0004 + λ₁ₐ=0.1 + LCC | — | — | — | ⏳ In progress |
+| [RUN_0006](runs/RUN_0006/AGENTS.md) | **2026-06-23** | RUN_0005 | PlainConvMultiHead 6-stage [32..320,320] + exact nnU-Net preprocessing + Option C (freeze encoder+decoder) | 0.5610 | 6.16 dB | **0.9345** | 🔄 To retest / 🔄 Training in progress |
 
 ---
 

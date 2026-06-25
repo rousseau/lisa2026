@@ -52,6 +52,7 @@ class Task1aDataset(Dataset):
         stage: str = "train",
         task_name: Optional[str] = None,
         spatial_size: Tuple[int, int, int] = (128, 128, 128),
+        use_nnunet_preprocessing: bool = False,
     ):
         import os
 
@@ -77,6 +78,7 @@ class Task1aDataset(Dataset):
             spatial_size=self.spatial_size,
             stage=stage,
             use_to_tensor=True,
+            use_nnunet_preprocessing=use_nnunet_preprocessing,
         )
 
     def __len__(self) -> int:

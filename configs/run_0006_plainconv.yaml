@@ -1,14 +1,17 @@
-# RUN_0006 — Multi-task nnU-Net v2 PlainConvUNet (refactor depuis DynUNet)
+# RUN_0006 — Multi-task nnU-Net v2 PlainConvUNet (iteration 2026-06-23)
 #
 # Objectif: reprendre l'architecture exacte de RUN_0003a (nnU-Net v2, DSC=0.8220)
-# et ajouter les 3 têtes multi-tâche.
+# et ajouter les 3 têtes multi-tâche. Adaptation au nouveau label mapping Task2
+# (79 patients HF+LF_seg, permutation des poids seg_outputs).
 run_id: "0006"
-run_name: "multitask_plainconv_nnunet_v2"
+run_name: "multitask_plainconv_nnunet_v2_iter2"
 task: "1a+1b+2"
-date: "2026-06-18"
+date: "2026-06-23"
 description: >
   PlainConvUNet (nnU-Net v2 backbone) avec Task 1a/1b/2.
   Warm-start depuis checkpoint_best.pth de RUN_0003a.
+  Label mapping permuté (Ventricles↔Caudates↔Lentiforms).
+  Données Task2 élargies à 79 patients (HF+LF_seg).
 
 run:
   task: multitask
@@ -17,11 +20,18 @@ run:
 data:
   data_root: "/home/rousseau/Data/LISA2026"
   bids_root: "/home/rousseau/Data/LISA2026"
-  csv_path: "/home/rousseau/Data/LISA2026/LISA_Task1a_2026.csv"
+  csv_path: "/home/rousseau/Data/LISA2026/Task1a/LISA_Task1a_2026.csv"
   split_pkl_1a: "results/splits/task1a_fixed.pkl"
-  split_pkl_2: "results/splits/task2_fixed.pkl"
+  split_pkl_2: "results/splits/task2_79_fixed.pkl"
+
+  # New directory layout (6 subdirs)
+  task2_dir: "/home/rousseau/Data/LISA2026/Task2"
+  task2extra_dir: "/home/rousseau/Data/LISA2026/Task2Extra"
+  task1b_dir: "/home/rousseau/Data/LISA2026/Task1b"
+
   image_suffix: "_ciso.nii.gz"
-  label_suffix: "_LF_seg.nii.gz"
+  label_suffix: "_seg.nii.gz"       # HF labels (scored)
+  label_suffix_lf: "_LF_seg.nii.gz"  # LF labels (auxiliary)
   patch_size: [112, 160, 128]
   val_roi_size: [112, 160, 128]
   train_num_samples: 2
@@ -43,7 +53,7 @@ training:
   batch_size: 2
   num_workers: 4
 
-  num_warmup_epochs: 50
+  num_warmup_epochs: 0
   dice_warmup_target: 0.10
   num_head_warmup_epochs: 0
   num_epochs: 1000
@@ -60,14 +70,15 @@ training:
   scheduler: "poly"
   poly_power: 0.9
 
-  joint_learning_rate: 5.0e-3
+  joint_learning_rate: 1.0e-3
   head_warmup_lr: 5.0e-5
   max_grad_norm: 12.0
-  torch_compile: true
+  torch_compile: false
 
   lambda_1a: 0.1
   lambda_1b: 1.0
   lambda_2: 1.0
+  lambda_lf: 0.5  # auxiliary LF supervision weight
 
   loss:
     focal_gamma: 2.0

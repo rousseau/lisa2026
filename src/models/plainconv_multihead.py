@@ -172,6 +172,28 @@ class PlainConvMultiHeadModel(nn.Module):
         print(f"[INFO] Loaded {loaded}/{len(tgt_sd)} keys from nnU-Net: {ckpt_path}")
         return loaded
 
+    def permute_seg_outputs(self, perm_map: dict, reset_indices: list):
+        """Permute output channels of seg_layers to match a new label mapping.
+
+        Args:
+            perm_map: {new_idx: old_idx} for channels to keep (e.g. {3: 7, 4: 8, ...})
+            reset_indices: list of channel indices to reinitialize from scratch.
+        """
+        for layer in self.decoder.seg_layers:
+            w = layer.weight.data
+            b = layer.bias.data
+            new_w = torch.zeros_like(w)
+            new_b = torch.zeros_like(b)
+            for new_i, old_i in perm_map.items():
+                new_w[new_i] = w[old_i].clone()
+                new_b[new_i] = b[old_i].clone()
+            for idx in reset_indices:
+                nn.init.kaiming_normal_(new_w[idx].unsqueeze(0), nonlinearity="relu")
+                nn.init.zeros_(new_b[idx])
+            layer.weight.data = new_w
+            layer.bias.data = new_b
+        print(f"[INFO] Seg outputs permuted: {len(perm_map)} reused, {len(reset_indices)} reset.")
+
     # ── Task-specific forwards ───────────────────────────────────────────────
 
     def forward_task2(self, x: torch.Tensor):
@@ -214,7 +236,7 @@ class PlainConvMultiHeadModel(nn.Module):
         out = self.recon_out(d)
         if out.shape[2:] != target_shape:
             out = F.interpolate(out, size=target_shape, mode="trilinear", align_corners=False)
-        return torch.sigmoid(out)
+        return out
 
     def forward(self, x: torch.Tensor, task: str = "2") -> torch.Tensor:
         if task == "1a":

@@ -94,7 +94,7 @@ def main():
     results_2 = evaluate_task2(
         model, val_loader_2, config, device,
         smoke_test=args.smoke_test,
-        model_fn=model.forward_task2,
+        model_fn=model.forward_task2_main,
     )
 
     from src.evaluation.metrics_io import build_payload, write_metrics

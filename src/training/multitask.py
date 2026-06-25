@@ -65,11 +65,6 @@ class MultiTaskTrainer(BaseTrainer):
         self._build_optimizer()
         self._load_pretrained()
 
-        # Freeze complete Task 2 backbone (Option C): keep nnU-Net backbone + decoder fixed,
-        # train only Task 1a and Task 1b heads.
-        if hasattr(self.model, 'freeze_task2'):
-            self.model.freeze_task2()
-
         # ── Loss functions ────────────────────────────────────────────────────
         loss_cfg = config["training"].get("loss", {})
         self.focal_gamma = float(loss_cfg.get("focal_gamma", 2.0))
@@ -81,6 +76,7 @@ class MultiTaskTrainer(BaseTrainer):
         self.lambda_1a = float(config["training"].get("lambda_1a", 1.0))
         self.lambda_1b = float(config["training"].get("lambda_1b", 1.0))
         self.lambda_2  = float(config["training"].get("lambda_2",  1.0))
+        self.lambda_lf = float(config["training"].get("lambda_lf", 0.5))
 
         # ── Phase lengths ────────────────────────────────────────────────────
         self.num_warmup_epochs     = 1 if smoke_test else int(config["training"].get("num_warmup_epochs", 10))
@@ -220,6 +216,11 @@ class MultiTaskTrainer(BaseTrainer):
                 if n_loaded > 0:
                     self.pretrained_loaded = True
                     print(f"[INFO] PlainConvMultiHead warm-started: {n_loaded} keys loaded.")
+                    # ── RUN_0006: permute seg outputs for new label mapping ──
+                    if hasattr(self.model, 'permute_seg_outputs'):
+                        perm_map = {0: 0, 1: 1, 2: 2, 3: 7, 4: 8, 5: 3, 6: 4, 7: 5, 8: 6}
+                        reset_indices = [9, 10, 11]
+                        self.model.permute_seg_outputs(perm_map, reset_indices)
                 else:
                     warnings.warn(f"[WARNING] No keys loaded from nnU-Net checkpoint. Training from scratch.", stacklevel=2)
                 return
@@ -363,6 +364,11 @@ class MultiTaskTrainer(BaseTrainer):
             with torch.amp.autocast("cuda", enabled=self.use_amp):
                 out = self.model.forward_task2(images)
                 loss = self._seg_loss_with_ds(out, labels)
+                # Auxiliary LF supervision
+                if "label_lf" in batch:
+                    labels_lf = batch["label_lf"].to(self.device)
+                    loss_lf = self._seg_loss_with_ds(out, labels_lf)
+                    loss = loss + self.lambda_lf * loss_lf
             self.scaler.scale(loss).backward()
             self.scaler.unscale_(self.optimizer)
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
@@ -428,7 +434,10 @@ class MultiTaskTrainer(BaseTrainer):
                 l1a = self._loss_1a(self.model.forward_task1a(b1a["img"].to(self.device)), b1a["labels"].to(self.device))
                 clean = b1b["img_B"].to(self.device)
                 l1b = self._loss_1b(self.model.forward_task1b(clean), clean)
-                l2  = self._seg_loss_with_ds(self.model.forward_task2(b2["img"].to(self.device)), b2["label"].to(self.device))
+                out2 = self.model.forward_task2(b2["img"].to(self.device))
+                l2  = self._seg_loss_with_ds(out2, b2["label"].to(self.device))
+                if "label_lf" in b2:
+                    l2 = l2 + self.lambda_lf * self._seg_loss_with_ds(out2, b2["label_lf"].to(self.device))
                 loss = (self.lambda_1a * l1a / self.loss_scale_1a
                       + self.lambda_1b * l1b / self.loss_scale_1b
                       + self.lambda_2  * l2  / self.loss_scale_2)
@@ -542,6 +551,15 @@ class MultiTaskTrainer(BaseTrainer):
                     self.model.load_state_dict(ckpt["model_state_dict"])
 
         # ── Phase 3: Joint ───────────────────────────────────────────────────
+        # RUN_0006 iteration: freeze encoder only, keep decoder + seg_layers
+        # trainable so Task 2 can adapt to the new label mapping.
+        if hasattr(self.model, 'freeze_encoder') and hasattr(self.model, 'unfreeze_decoder'):
+            print("[INFO] Freezing encoder; decoder + seg_layers kept trainable for label mapping adaptation.")
+            self.model.freeze_encoder()
+            self.model.unfreeze_decoder()
+        else:
+            self.model.freeze_task2()
+
         prev_lr = self.optimizer.param_groups[0]["lr"]
         for pg in self.optimizer.param_groups:
             pg["lr"] = self.joint_lr

@@ -29,40 +29,45 @@ from monai.transforms import (
 )
 
 
+from .nnunet_preprocessor import LoadAndPreprocessNnunetd
+
+
 def build_image_only_transforms(
     spatial_size: Tuple[int, int, int],
     stage: str,
     use_to_tensor: bool = True,
+    use_nnunet_preprocessing: bool = False,
 ) -> Compose:
     """Base pipeline for single-channel image volumes (Tasks 1a, 1b).
-
-    Steps:
-        1. Load NIfTI via nibabel.
-        2. EnsureChannelFirst → [1, H, W, D].
-        3. NormalizeIntensity (channel-wise, includes zero voxels).
-        4. CenterSpatialCrop → *spatial_size*.
-        5. SpatialPad        → *spatial_size* (symmetric padding).
-        6. EnsureTyped       → float32 tensor.
-        7. [train only] Affine + intensity augmentations.
-        8. ToTensor (optional, for legacy Task1aDataset compatibility).
 
     Args:
         spatial_size:   Target spatial dimensions (H, W, D).
         stage:          ``"train"`` or ``"val"``.
         use_to_tensor:  Append ``ToTensord`` at the end (default True).
+        use_nnunet_preprocessing:  If True, use exact nnU-Net DefaultPreprocessor
+            instead of LoadImaged+NormalizeIntensityd.
 
     Returns:
         MONAI ``Compose`` transform pipeline.
     """
     keys = ["img"]
-    base = [
-        LoadImaged(keys=keys, reader="nibabelreader"),
-        EnsureChannelFirstd(keys=keys),
-        NormalizeIntensityd(keys=keys, nonzero=False, channel_wise=True),
+    if use_nnunet_preprocessing:
+        base = [
+            LoadAndPreprocessNnunetd(keys=["img", "label"]),
+            EnsureTyped(keys=keys),
+        ]
+    else:
+        base = [
+            LoadImaged(keys=keys, reader="nibabelreader"),
+            EnsureChannelFirstd(keys=keys),
+            NormalizeIntensityd(keys=keys, nonzero=False, channel_wise=True),
+            EnsureTyped(keys=keys),
+        ]
+
+    base.extend([
         CenterSpatialCropd(keys=keys, roi_size=spatial_size),
         SpatialPadd(keys=keys, spatial_size=spatial_size, mode="symmetric"),
-        EnsureTyped(keys=keys),
-    ]
+    ])
 
     if stage == "train":
         base.extend(
@@ -98,6 +103,7 @@ def build_segmentation_transforms(
     stage: str,
     num_classes: int,
     num_samples: int = 1,
+    use_nnunet_preprocessing: bool = False,
 ) -> Compose:
     """Transform pipeline for image + label segmentation (Task 2).
 
@@ -106,17 +112,24 @@ def build_segmentation_transforms(
         stage:         ``"train"`` or ``"val"``.
         num_classes:   Number of label classes (used for balanced crop ratios).
         num_samples:   Number of random crops per volume (train only, default 1).
+        use_nnunet_preprocessing: If True, use exact nnU-Net DefaultPreprocessor.
 
     Returns:
         MONAI ``Compose`` transform pipeline.
     """
     keys = ["img", "label"]
-    base = [
-        LoadImaged(keys=keys, reader="nibabelreader"),
-        EnsureChannelFirstd(keys=keys),
-        NormalizeIntensityd(keys=["img"], nonzero=False, channel_wise=True),
-        EnsureTyped(keys=keys),
-    ]
+    if use_nnunet_preprocessing:
+        base = [
+            LoadAndPreprocessNnunetd(keys=keys),
+            EnsureTyped(keys=keys),
+        ]
+    else:
+        base = [
+            LoadImaged(keys=keys, reader="nibabelreader"),
+            EnsureChannelFirstd(keys=keys),
+            NormalizeIntensityd(keys=["img"], nonzero=False, channel_wise=True),
+            EnsureTyped(keys=keys),
+        ]
 
     if stage == "train":
         base.extend(
