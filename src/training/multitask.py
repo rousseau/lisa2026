@@ -206,9 +206,30 @@ class MultiTaskTrainer(BaseTrainer):
         self.pretrained_loaded = False
         if not pretrained:
             return
-        if not os.path.exists(pretrained):
-            warnings.warn(f"[WARNING] Pretrained checkpoint not found: {pretrained}. Training from scratch.", stacklevel=2)
+
+        # Resolve checkpoint path with fallbacks (local, env var, work dir)
+        candidates = [pretrained]
+        if not os.path.isabs(pretrained):
+            # project root relative
+            candidates.append(os.path.join(os.getcwd(), pretrained))
+            # env override
+            for env_key in ["NNUNET_RESULTS", "WORK", "LISA_WORK"]:
+                base = os.getenv(env_key)
+                if base:
+                    candidates.append(os.path.join(base, pretrained))
+        found = next((p for p in candidates if os.path.exists(p)), None)
+
+        if found is None:
+            warnings.warn(
+                f"[WARNING] Pretrained checkpoint not found. Tried:\n  "
+                + "\n  ".join(candidates)
+                + "\nTraining from scratch.",
+                stacklevel=2,
+            )
             return
+        pretrained = found
+        print(f"[INFO] Resolved pretrained checkpoint: {pretrained}")
+
         try:
             # Handle nnU-Net v2 checkpoint format (for PlainConvMultiHeadModel)
             if hasattr(self.model, 'load_pretrained_nnunet'):

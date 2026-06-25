@@ -51,7 +51,7 @@ model:
 
 # ── Training ────────────────────────────────────────────────────────────────
 training:
-  batch_size: 2
+  batch_size: 1
   num_workers: 4
 
   num_warmup_epochs: 0
