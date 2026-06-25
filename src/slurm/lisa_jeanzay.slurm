@@ -182,7 +182,15 @@ if [[ -f "$JZ_CONFIG" ]]; then
             ;;
         *)
             # Generic handling for other runs
-            TASK=$(python3 -c "import yaml; print(yaml.safe_load(open('$JZ_CONFIG'))['run']['task'])")
+            TASK=$(python3 -c "
+import yaml
+cfg = yaml.safe_load(open('$JZ_CONFIG'))
+# Support both formats: nested run.task or top-level task
+task = cfg.get('run', {}).get('task') if isinstance(cfg.get('run'), dict) else None
+if task is None:
+    task = cfg.get('task', 'unknown')
+print(task)
+")
             case "$TASK" in
                 1a)        MODULE="src.runners.train_task1a" ;;
                 1b)        MODULE="src.runners.train_task1b" ;;
@@ -210,7 +218,14 @@ else
 
     JZ_CONFIG="configs/run_${RUN_ID}_jeanzay.yaml"
     if [[ -f "$JZ_CONFIG" ]]; then
-        TASK=$(python3 -c "import yaml; print(yaml.safe_load(open('$JZ_CONFIG'))['run']['task'])")
+        TASK=$(python3 -c "
+import yaml
+cfg = yaml.safe_load(open('$JZ_CONFIG'))
+task = cfg.get('run', {}).get('task') if isinstance(cfg.get('run'), dict) else None
+if task is None:
+    task = cfg.get('task', 'unknown')
+print(task)
+")
     case "$TASK" in
         1a)        EVAL_MODULE="src.runners.evaluate_task1a" ;;
         1b)        EVAL_MODULE="src.runners.evaluate_task1b" ;;
