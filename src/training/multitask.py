@@ -451,27 +451,48 @@ class MultiTaskTrainer(BaseTrainer):
         for step in tqdm(range(steps), desc="Joint-Train"):
             b1a = next(iter_1a); b1b = next(iter_1b); b2 = next(iter_2)
             self.optimizer.zero_grad(set_to_none=True)
+
+            # ── Forward all three tasks (keeps computation graphs) ─────────────
             with torch.amp.autocast("cuda", enabled=self.use_amp):
-                l1a = self._loss_1a(self.model.forward_task1a(b1a["img"].to(self.device)), b1a["labels"].to(self.device))
-                clean = b1b["img_B"].to(self.device)
-                l1b = self._loss_1b(self.model.forward_task1b(clean), clean)
                 out2 = self.model.forward_task2(b2["img"].to(self.device))
                 l2  = self._seg_loss_with_ds(out2, b2["label"].to(self.device))
                 if "label_lf" in b2:
                     l2 = l2 + self.lambda_lf * self._seg_loss_with_ds(out2, b2["label_lf"].to(self.device))
-                loss = (self.lambda_1a * l1a / self.loss_scale_1a
-                      + self.lambda_1b * l1b / self.loss_scale_1b
-                      + self.lambda_2  * l2  / self.loss_scale_2)
-            if not torch.isfinite(loss):
+
+                l1a = self._loss_1a(
+                    self.model.forward_task1a(b1a["img"].to(self.device)),
+                    b1a["labels"].to(self.device),
+                )
+                clean = b1b["img_B"].to(self.device)
+                l1b = self._loss_1b(self.model.forward_task1b(clean), clean)
+
+            # NaN/Inf guard
+            if not (torch.isfinite(l1a) and torch.isfinite(l1b) and torch.isfinite(l2)):
                 self.optimizer.zero_grad(set_to_none=True)
                 nan_steps += 1
                 continue
-            self.scaler.scale(loss).backward()
+
+            # ── Sequential backward to reduce memory peak ───────────────────────
+            # Free the largest graph (Task 2 decoder + seg layers) first, then
+            # Task 1a, then Task 1b.  Encoder graph is retained for the next
+            # backward via retain_graph=True.
+            self.scaler.scale(self.lambda_2  * l2  / self.loss_scale_2).backward(retain_graph=True)
+            self.scaler.scale(self.lambda_1a * l1a / self.loss_scale_1a).backward(retain_graph=True)
+            self.scaler.scale(self.lambda_1b * l1b / self.loss_scale_1b).backward()
+
             self.scaler.unscale_(self.optimizer)
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
             self.scaler.step(self.optimizer)
             self.scaler.update()
-            total += float(loss.item()); t1a += float(l1a.item()); t1b += float(l1b.item()); t2 += float(l2.item())
+
+            total += (self.lambda_1a * float(l1a.item()) / self.loss_scale_1a
+                    + self.lambda_1b * float(l1b.item()) / self.loss_scale_1b
+                    + self.lambda_2  * float(l2.item())  / self.loss_scale_2)
+            t1a += float(l1a.item())
+            t1b += float(l1b.item())
+            t2  += float(l2.item())
+            if self.smoke_test and step >= 1:
+                break
         valid = max(1, steps - nan_steps)
         if nan_steps > 0 and (nan_steps / max(1, steps)) > 0.25:
             raise RuntimeError(f"Joint phase unstable: {int(nan_steps)}/{steps} NaN/Inf steps.")

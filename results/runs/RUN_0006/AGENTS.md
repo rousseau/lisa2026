@@ -173,6 +173,7 @@ Ancien `dataset.json` (checkpoint nnU-Net) → nouveau mapping déclaré par le 
 | **Nouveau split 79** | `results/splits/task2_79_fixed.pkl` | 70 train / 9 val, seed 42, fixation patient-level |
 | **Config paths** | `configs/run_0006_plainconv.yaml` | Pointe vers `Task2/`, `Task2Extra/`, `Task1b/` |
 | **Joint phase : encoder-only freeze** | `src/training/multitask.py`, config | `freeze_encoder()` + `unfreeze_decoder()` (Option B, LR=1e-3). Permet adaptation du decoder au nouveau mapping. |
+| **OOM fix : backward séquentiel** | `src/training/multitask.py` | Les 3 tâches sont backpropagées séparément (`retain_graph=True`) pour libérer les graphes Task 2 / Task 1a avant Task 1b. Réduit le pic mémoire sur H100 80GB. |
 
 ### Objectifs mis à jour
 - Task 2 DSC ≥ 0.80 sur nouveau mapping (79 patients)
