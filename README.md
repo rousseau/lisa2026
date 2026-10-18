@@ -28,7 +28,10 @@ lisa2026/
 
 ## Données
 
-- Challenge : `/home/rousseau/Data/LISA2026/` (ou `$LISA_DATA_ROOT`)
+- Challenge : `/home/rousseau/Data/LISA2026/` (ou `$LISA_DATA_ROOT`), copie locale de la
+  référence sur Garage, bucket `lisa2026` (`sourcedata/` = arborescence du challenge telle que
+  distribuée : `Task1a/`, `Task1b/`, `Task2/`, …). Pour la rapatrier :
+  `rclone copy garage:lisa2026/sourcedata /home/rousseau/Data/LISA2026`
 - Scanner : Hyperfine SWOOP (0.064 T), pédiatrique
 - 3 orientations par sujet : axiale (`_LF_axi`), coronale (`_LF_cor`), sagittale (`_LF_sag`)
 
